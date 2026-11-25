@@ -1,0 +1,17 @@
+# M1 world-switch self-test, 2026-11-25T18:53Z
+# host: 6.18.58.1-microsoft-standard-WSL2, 13th Gen Intel(R) Core(TM) i5-13600KF, WSL2 cmdline: nopti ibt=off nmi_watchdog=0
+# insmod beringia_host.ko selftest=30 selftest_cpus=6 selftest_spin=50
+[ 2098.547369] beringia: beringia_host 1 loading (tsc 3494399000 Hz)
+[ 2098.548022] beringia: selftest: 6 CPU(s), 30 s, 50 spins per host call
+[ 2128.548029] beringia: cpu 0: left the foreign world (-4096)
+[ 2128.548029] beringia: cpu 4: left the foreign world (-4096)
+[ 2128.548033] beringia: cpu 2: left the foreign world (-4096)
+[ 2128.548036] beringia: cpu 1: left the foreign world (-4096)
+[ 2128.548039] beringia: cpu 5: left the foreign world (-4096)
+[ 2128.548039] beringia: cpu 3: left the foreign world (-4096)
+[ 2129.088493] beringia: selftest: loops 10875290, #UD handled 10875290, host calls (yield) 10875290, forwarded interrupts 23649
+[ 2129.091385] beringia: selftest:   vector 0xed: 23613
+[ 2129.093464] beringia: selftest:   vector 0xf3: 34
+[ 2129.094908] beringia: selftest:   vector 0xfd: 2
+[ 2129.097499] beringia: selftest: PASSED
+[ 2129.105089] beringia: beringia_host unloaded

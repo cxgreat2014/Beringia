@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+obj-m += beringia_host.o
+beringia_host-y := main.o mem.o cpu.o selftest.o selftest_asm.o arch/x86_64/world.o arch/x86_64/world_asm.o
+ccflags-y += -I$(src)/include
+asflags-y += -I$(src)/include
+# Code that runs in the foreign world must not be rewritten into call-depth-tracking thunks (see world.S).
+OBJECT_FILES_NON_STANDARD_world_asm.o := y
+OBJECT_FILES_NON_STANDARD_selftest_asm.o := y
+# With IBT, objtool also runs on the linked module; the world switch transfers control between worlds in ways it
+# cannot model (stack switches, far returns, jumps into foreign code), so the module is not objtool-validated.
+OBJECT_FILES_NON_STANDARD_beringia_host.o := y
