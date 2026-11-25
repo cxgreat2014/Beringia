@@ -13,8 +13,6 @@ void bh_mem_exit(void);
 int bh_cpu_init(void);
 void bh_cpu_exit(void);
 
-/* main.c */
-void bh_logf(const char *fmt, ...) __printf(1, 2);
 
 /* selftest.c */
 int bh_selftest(unsigned int seconds, unsigned int ncpus, unsigned int spin);

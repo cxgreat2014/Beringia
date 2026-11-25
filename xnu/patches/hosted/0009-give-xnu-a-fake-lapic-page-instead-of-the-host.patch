@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 04:24:36 +0800
+Subject: [PATCH 12/17] hosted: give XNU a fake LAPIC page instead of the host
+ APIC
+
+---
+ osfmk/i386/lapic_native.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/osfmk/i386/lapic_native.c b/osfmk/i386/lapic_native.c
+index ef9f621..e98b0bd 100644
+--- a/osfmk/i386/lapic_native.c
++++ b/osfmk/i386/lapic_native.c
+@@ -29,6 +29,7 @@
+  * @OSF_COPYRIGHT@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <mach/mach_types.h>
+ #include <mach/kern_return.h>
+ 
+@@ -276,6 +277,11 @@ lapic_safe_apicid(void)
+ 	uint32_t        hi;
+ 	boolean_t       is_lapic_enabled, is_local_x2apic;
+ 
++	/* BERINGIA: no real APIC to read; the host numbers this CPU. */
++	if (beringia_hosted()) {
++		return beringia_shared.cpu[beringia_cpu()].apic_id;
++	}
++
+ 	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+ 	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
+ 	is_local_x2apic   = (lo & MSR_IA32_APIC_BASE_EXTENDED) != 0;
+@@ -372,6 +378,27 @@ lapic_init(void)
+ 	boolean_t       is_boot_processor;
+ 	boolean_t       is_lapic_enabled;
+ 
++	/*
++	 * BERINGIA: the local APIC belongs to the Linux host (Hyper-V on WSL2), so XNU must not probe or program it.
++	 * Give XNU a RAM page standing in for its LAPIC and use the legacy MMIO ops on it: reads and writes then hit
++	 * RAM, not the real LAPIC MMIO window. The timer and IPIs are delivered by the host, not by this page.
++	 */
++	if (beringia_hosted()) {
++		is_x2apic = FALSE;
++		lapic_ops = &legacy_ops;
++		kmem_alloc(kernel_map, &lapic_vbase, round_page(LAPIC_SIZE),
++		    KMA_PERMANENT | KMA_NOFAIL | KMA_ZERO | KMA_KOBJECT, VM_KERN_MEMORY_IOKIT);
++		*LAPIC_MMIO(VERSION) = 0x14;                    /* the native path wants >= 0x14 */
++		*LAPIC_MMIO(ID) = 0;                            /* boot APIC id 0 */
++		*LAPIC_MMIO(LDR) = 0;
++		*LAPIC_MMIO(SVR) = LAPIC_SVR_ENABLE | 0xff;
++		lapic_cpu_map_init();
++		lapic_cpu_map(0, 0);
++		current_cpu_datap()->cpu_phys_number = cpu_to_lapic[0];
++		kprintf("BERINGIA: hosted LAPIC (fake MMIO page), boot cpu id 0x%x\n", cpu_to_lapic[0]);
++		return;
++	}
++
+ 	/* Examine the local APIC state */
+ 	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+ 	is_boot_processor = (lo & MSR_IA32_APIC_BASE_BSP) != 0;

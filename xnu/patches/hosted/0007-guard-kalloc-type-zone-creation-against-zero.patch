@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 04:06:34 +0800
+Subject: [PATCH 10/17] hosted: guard kalloc_type zone creation against zero
+ typed views
+
+With upstream LLVM there is no Apple type summary, so every kalloc_type view
+is data-only: kalloc_type_view_copy routes them to the data heap and counts
+none for typed-zone creation. Guard the fixed/var iterators against kt_count==0
+(the macOS-DroidVM Linux bring-up uses the same degraded configuration).
+---
+ osfmk/i386/trap.c   | 4 ++++
+ osfmk/kern/kalloc.c | 7 +++++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index 4a22967..eef1043 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -60,6 +60,7 @@
+  * Hardware trap/fault handler.
+  */
+ 
++#include <beringia_hosted.h>
+ #include <mach_kdp.h>
+ #include <mach_ldebug.h>
+ 
+@@ -825,6 +826,9 @@ kernel_trap(
+ 		if (handle_kernel_breakpoint(saved_state, &reason, &trapcomment)) {
+ 			goto common_return;
+ 		}
++		if (beringia_hosted()) {
++			kprintf("BERINGIA kernel #UD kern_ip=%p\n", (void *)kern_ip);
++		}
+ 		fpUDflt(kern_ip);
+ 		goto debugger_entry;
+ 
+diff --git a/osfmk/kern/kalloc.c b/osfmk/kern/kalloc.c
+index 5c0d35a..b77d9f0 100644
+--- a/osfmk/kern/kalloc.c
++++ b/osfmk/kern/kalloc.c
+@@ -64,6 +64,7 @@
+  *	to be used by the kernel to manage dynamic memory fast.
+  */
+ 
++#include <beringia_hosted.h>
+ #include "mach/vm_types.h"
+ #include <mach/boolean.h>
+ #include <mach/sdt.h>
+@@ -1905,6 +1906,9 @@ kalloc_type_view_init_fixed(void)
+ 	 * all kalloc type views in kt_buffer.
+ 	 */
+ 	kt_count = kalloc_type_view_parse(KTV_FIXED);
++	if (kt_count == 0) {
++		return; /* BERINGIA: no typed views without Apple's type summary; nothing to place */
++	}
+ 	assert(kt_count < KALLOC_TYPE_SIZE_MASK);
+ 
+ #if MACH_ASSERT
+@@ -2025,6 +2029,9 @@ kalloc_type_view_init_var(void)
+ 	 * aren't rediected in kt_buffer.
+ 	 */
+ 	kt_count = kalloc_type_view_parse(KTV_VAR);
++	if (kt_count == 0) {
++		return; /* BERINGIA: see kalloc_type_view_init_fixed */
++	}
+ 	assert(kt_count < UINT32_MAX);
+ 
+ #if MACH_ASSERT

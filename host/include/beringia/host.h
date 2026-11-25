@@ -77,12 +77,16 @@ void bh_timer_set(int cpu, bh_u64 tsc_deadline, void (*fire)(int cpu));
 /* ---- facts about the host ---- */
 
 bh_u64 bh_tsc_hz(void);
-/* Linux's PML4[511] PDPT entries 510 and 511 (kernel image, modules, fixmap), for the foreign kernel's own tables. */
-void bh_linux_pdpt(bh_u64 out[2]);
+/* Linux's PML4[511] PDPT (all 512 entries: its kernel image, modules and fixmap are at 510/511), for the foreign
+ * kernel's own tables and to keep the foreign kernel's virtual space below Linux's part of that slot. */
+void bh_linux_pdpt(bh_u64 out[512]);
 /* used[i] = 1 for each PML4 slot (256..511) Linux has a mapping in. */
 void bh_pml4_used(unsigned char used[512]);
 /* Bring-up log: one line to the kernel log and to the trace file (beringia_host.ko trace=PATH). */
 void bh_log(const char *s);
+void bh_logf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* Console output from a host call: to dmesg and, synchronously, to the trace file (survives a VM crash). */
+void bh_console(const char *s);
 /* A host file for the foreign kernel's devices (disk images): open, size, positional read/write. */
 void *bh_file_open(const char *path, int writable, bh_u64 *size);
 long bh_file_rw(void *f, int write, void *buf, unsigned long len, bh_u64 off);

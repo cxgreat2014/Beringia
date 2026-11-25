@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 05:16:57 +0800
+Subject: [PATCH 16/17] hosted: end the run on halt/reboot instead of resetting
+ the VM
+
+---
+ osfmk/i386/AT386/model_dep.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/osfmk/i386/AT386/model_dep.c b/osfmk/i386/AT386/model_dep.c
+index ab30d3e..1ded7fc 100644
+--- a/osfmk/i386/AT386/model_dep.c
++++ b/osfmk/i386/AT386/model_dep.c
+@@ -69,6 +69,7 @@
+ 
+ #define __APPLE_API_PRIVATE 1
+ #define __APPLE_API_UNSTABLE 1
++#include <beringia_hosted.h>
+ #include <kern/debug.h>
+ 
+ #include <mach/i386/vm_param.h>
+@@ -646,6 +647,10 @@ __attribute__((noreturn))
+ void
+ halt_all_cpus(boolean_t reboot)
+ {
++	if (beringia_hosted()) {
++		/* BERINGIA: do not reset the host VM; end the hosted run and return to Linux. */
++		beringia_panic(reboot ? "MACH Reboot" : "CPU halted");
++	}
+ 	if (reboot) {
+ 		printf("MACH Reboot\n");
+ 		PEHaltRestart( kPERestartCPU );

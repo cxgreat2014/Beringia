@@ -17,6 +17,8 @@
 #include <linux/timekeeping.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
+#include <linux/spinlock.h>
 #include <asm/tsc.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
@@ -41,19 +43,67 @@ MODULE_PARM_DESC(selftest_spin, "pause iterations between the self-test's host c
 static struct file *trace_file;
 static DEFINE_MUTEX(trace_lock);
 
-/* One line to the kernel log, and to the trace file when there is one (ordinary process context only). */
+/*
+ * Lines logged from atomic context (host calls run with interrupts off) go through a ring that a work item writes to
+ * the trace file, synchronously per line, so that the last lines before a crash of the VM reach the Windows side.
+ */
+#define TRACE_RING 256
+static char trace_ring[TRACE_RING][240];
+static unsigned int trace_head, trace_tail;
+static DEFINE_SPINLOCK(trace_ring_lock);
+
+static void trace_write(const char *s)
+{
+	loff_t pos;
+
+	mutex_lock(&trace_lock);
+	pos = i_size_read(file_inode(trace_file));
+	kernel_write(trace_file, s, strlen(s), &pos);
+	kernel_write(trace_file, "\n", 1, &pos);
+	mutex_unlock(&trace_lock);
+}
+
+static void trace_flush(struct work_struct *w)
+{
+	char line[240];
+	unsigned long flags;
+
+	for (;;) {
+		spin_lock_irqsave(&trace_ring_lock, flags);
+		if (trace_tail == trace_head) {
+			spin_unlock_irqrestore(&trace_ring_lock, flags);
+			return;
+		}
+		memcpy(line, trace_ring[trace_tail % TRACE_RING], sizeof(line));
+		trace_tail++;
+		spin_unlock_irqrestore(&trace_ring_lock, flags);
+		trace_write(line);
+	}
+}
+static DECLARE_WORK(trace_work, trace_flush);
+
+/* One line to the kernel log, and to the trace file when there is one. */
 void bh_log(const char *s)
 {
-	pr_info("beringia: %s\n", s);
-	if (trace_file && !in_interrupt() && !irqs_disabled()) {
-		loff_t pos;
+	unsigned long flags;
 
-		mutex_lock(&trace_lock);
-		pos = i_size_read(file_inode(trace_file));
-		kernel_write(trace_file, s, strlen(s), &pos);
-		kernel_write(trace_file, "\n", 1, &pos);
-		mutex_unlock(&trace_lock);
+	pr_info("beringia: %s\n", s);
+	if (!trace_file)
+		return;
+	if (!in_interrupt() && !irqs_disabled() && preemptible()) {
+		flush_work(&trace_work);
+		trace_write(s);
+		return;
 	}
+	spin_lock_irqsave(&trace_ring_lock, flags);
+	if (trace_head - trace_tail < TRACE_RING) {
+		strscpy(trace_ring[trace_head % TRACE_RING], s, sizeof(trace_ring[0]));
+		trace_head++;
+	}
+	spin_unlock_irqrestore(&trace_ring_lock, flags);
+	/* Unbound: the CPU that made the host call is busy in the foreign kernel (or wedged in a panic), so the flush
+	 * must be able to run on any other CPU. */
+	queue_work(system_unbound_wq, &trace_work);
 }
 EXPORT_SYMBOL(bh_log);
 
@@ -67,6 +117,15 @@ void bh_logf(const char *fmt, ...)
 	va_end(ap);
 	bh_log(buf);
 }
+EXPORT_SYMBOL(bh_logf);
+
+/* Console output from a foreign CPU's host call: to dmesg immediately, and queued for the trace file.
+ * Interrupts are NOT enabled here (the world switch is mid-transition), so the file write is deferred to the work item. */
+void bh_console(const char *s)
+{
+	bh_log(s);
+}
+EXPORT_SYMBOL(bh_console);
 
 bh_u64 bh_tsc_hz(void)
 {
@@ -79,13 +138,11 @@ static u64 *bh_linux_pml4(void)
 	return (u64 *)__va(__read_cr3() & CR3_ADDR_MASK);
 }
 
-void bh_linux_pdpt(bh_u64 out[2])
+void bh_linux_pdpt(bh_u64 out[512])
 {
 	u64 e = bh_linux_pml4()[511];
-	u64 *pdpt = (u64 *)__va(e & PTE_PFN_MASK);
 
-	out[0] = pdpt[510];
-	out[1] = pdpt[511];
+	memcpy(out, __va(e & PTE_PFN_MASK), 4096);
 }
 EXPORT_SYMBOL(bh_linux_pdpt);
 
@@ -183,6 +240,7 @@ static void __exit bh_exit(void)
 	bh_cpu_exit();
 	bh_mem_exit();
 	bh_log("beringia_host unloaded");
+	flush_work(&trace_work);
 	if (trace_file)
 		filp_close(trace_file, NULL);
 }

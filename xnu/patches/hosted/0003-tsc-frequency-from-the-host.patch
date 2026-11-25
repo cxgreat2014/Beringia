@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 03:06:18 +0800
+Subject: [PATCH 06/17] hosted: TSC frequency from the host
+
+CPUID leaves 0x15/0x16 and the platform MSRs are not usable in a VM; when
+hosted, tsc_init takes the frequency the host measured, as the VMM path
+does.
+---
+ osfmk/i386/tsc.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/osfmk/i386/tsc.c b/osfmk/i386/tsc.c
+index 3addcb6..806fd8e 100644
+--- a/osfmk/i386/tsc.c
++++ b/osfmk/i386/tsc.c
+@@ -36,6 +36,7 @@
+  */
+ 
+ 
++#include <beringia_hosted.h>
+ #include <mach/mach_types.h>
+ 
+ #include <kern/cpu_data.h>
+@@ -140,6 +141,19 @@ tsc_init(void)
+ {
+ 	boolean_t       N_by_2_bus_ratio = FALSE;
+ 
++	/* BERINGIA: CPUID cannot be trusted for the TSC frequency in a VM; the host knows it */
++	if (beringia_hosted() && beringia_shared.tsc_hz) {
++		tscFreq = busFreq = beringia_shared.tsc_hz;
++		busFCvtt2n = ((1 * Giga) << 32) / busFreq;
++		busFCvtn2t = 0xFFFFFFFFFFFFFFFFULL / busFCvtt2n;
++		tscFCvtt2n = busFCvtt2n;
++		tscFCvtn2t = busFCvtn2t;
++		tscGranularity = 1;
++		bus2tsc = 1;
++		kprintf("BERINGIA: TSC frequency %llu Hz (host)\n", tscFreq);
++		return;
++	}
++
+ 	if (cpuid_vmm_present()) {
+ 		kprintf("VMM vendor %s TSC frequency %u KHz bus frequency %u KHz\n",
+ 		    cpuid_vmm_family_string(),

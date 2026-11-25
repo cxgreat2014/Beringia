@@ -1,7 +1,7 @@
-From 007322c4d83af504543abd463737c9737da4261c Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 02:22:43 +0800
-Subject: [PATCH 3/3] build: stand-ins for private headers and symbols the
+Subject: [PATCH 03/17] build: stand-ins for private headers and symbols the
  public tree lacks
 
 ---
@@ -67,6 +67,3 @@ index 0000000..33e8d4d
 +	(void)func; (void)arg; (void)dso;
 +	return 0;
 +}
--- 
-2.43.0
-

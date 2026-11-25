@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 bad=0
 while IFS= read -r f; do
 	case "$f" in
-	LICENSES/*|LICENSE|*.patch|*.json|*.plist|series|.gitignore|.editorconfig|*/series|README.md|ROADMAP.md|NOTICE.md|CONTRIBUTING.md|*/README.md) continue ;;
+	LICENSES/*|LICENSE|*.patch|*.json|*.plist|series|.gitignore|.editorconfig|*/series|README.md|ROADMAP.md|NOTICE.md|CONTRIBUTING.md|*/README.md|tests/results/*) continue ;;
 	esac
 	if ! head -n 5 "$f" | grep -q 'SPDX-License-Identifier:'; then
 		echo "missing SPDX-License-Identifier: $f"

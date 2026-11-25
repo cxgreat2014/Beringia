@@ -20,8 +20,9 @@ if [ "${1:-}" = --check ]; then
 	tmp=$(mktemp -d)
 	git worktree add -q --detach "$tmp" "$XNU_COMMIT"
 	trap 'git worktree remove --force "$tmp"' EXIT
+	# Apply for real (not --check): a file created by an earlier patch must exist for a later one that modifies it.
 	grep -v '^#' "$BERINGIA_ROOT/xnu/series" | while read -r p; do
-		[ -n "$p" ] && git -C "$tmp" apply --check "$BERINGIA_ROOT/xnu/patches/$p" && echo "ok  $p"
+		[ -n "$p" ] && git -C "$tmp" apply "$BERINGIA_ROOT/xnu/patches/$p" && echo "ok  $p"
 	done
 	exit 0
 fi
@@ -32,7 +33,7 @@ fi
 git checkout -q -B beringia "$XNU_COMMIT"
 grep -v '^#' "$BERINGIA_ROOT/xnu/series" | while read -r p; do
 	[ -n "$p" ] || continue
-	git -c user.name=Beringia -c user.email=beringia@invalid am -q --keep-cr "$BERINGIA_ROOT/xnu/patches/$p" ||
+	git am -q --keep-cr "$BERINGIA_ROOT/xnu/patches/$p" ||
 		die "patch $p does not apply"
 	echo "applied $p"
 done

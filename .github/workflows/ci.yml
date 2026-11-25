@@ -9,7 +9,7 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: SPDX headers
         run: scripts/check-spdx.sh
       - name: shellcheck
@@ -22,16 +22,16 @@ jobs:
   xnu-patches:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: series applies to xnu-12377.1.9
         run: |
           git clone -q --depth 1 --branch xnu-12377.1.9 https://github.com/apple-oss-distributions/xnu.git /tmp/xnu
-          grep -v '^#' xnu/series | while read -r p; do [ -n "$p" ] && git -C /tmp/xnu apply --check "$PWD/xnu/patches/$p" && echo "ok $p"; done
+          grep -v '^#' xnu/series | while read -r p; do [ -n "$p" ] && git -C /tmp/xnu apply "$PWD/xnu/patches/$p" && echo "ok $p"; done
 
   modules:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: kernel headers
         run: sudo apt-get install -y linux-headers-$(uname -r)
       - name: build host modules

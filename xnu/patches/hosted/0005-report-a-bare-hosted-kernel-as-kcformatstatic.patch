@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 03:32:15 +0800
+Subject: [PATCH 08/17] hosted: report a bare hosted kernel as KCFormatStatic
+
+---
+ pexpert/gen/kcformat.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/pexpert/gen/kcformat.c b/pexpert/gen/kcformat.c
+index a8100f0..ce6b4cd 100644
+--- a/pexpert/gen/kcformat.c
++++ b/pexpert/gen/kcformat.c
+@@ -29,6 +29,7 @@
+  * @OSF_FREE_COPYRIGHT@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <pexpert/pexpert.h>
+ #include <libkern/section_keywords.h>
+ #include <libkern/kernel_mach_header.h>
+@@ -203,7 +204,13 @@ PE_get_primary_kc_format(kc_format_t *type)
+ 				*type = KCFormatKCGEN;
+ 			}
+ #else
+-			*type = KCFormatDynamic;
++			/* BERINGIA: a hosted bare kernel links its kexts statically, so their
++			 * __kalloc_type sections are coalesced with the kernel's (KCFormatStatic). */
++			if (beringia_hosted()) {
++				*type = KCFormatStatic;
++			} else {
++				*type = KCFormatDynamic;
++			}
+ #endif
+ 		}
+ 	}

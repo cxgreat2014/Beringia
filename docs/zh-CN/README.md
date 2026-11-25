@@ -24,9 +24,9 @@ CPU 上原生运行 macOS 26 用户态。中间没有虚拟机，也没有指令
 |---|---|---|
 | M0 | Linux 上可复现地编译 XNU | ✅ 原版 tag + 3 个构建补丁，编出 23.6 MB 的 `kernel.development` |
 | M1 | 宿主基础：预留内存、完整世界切换、中断转发（不依赖 XNU 的自测） | ✅ 6 CPU × 30 s：1087 万次世界往返、2.4 万次中断转发，零内核告警 |
-| M2 | XNU 早期启动到 `kernel_bootstrap_thread`，控制台/panic 输出到宿主 | ⏳ 下一步 |
-| M3 | 时钟、idle、抢占让渡、多 CPU | ⬜ |
-| M4 | 平台 kext 与内核集合（KC）构建，IOKit 到"等待根设备" | ⬜ |
+| M2 | XNU 早期启动到 `kernel_bootstrap_thread`，控制台/panic 输出到宿主 | ✅ 已启动到 IOKit 平台匹配 |
+| M3 | 时钟、idle、抢占让渡、多 CPU | 🔨 单核：宿主定时器+idle 已通，多核未做 |
+| M4 | 平台 kext 与内核集合（KC）构建，IOKit 到"等待根设备" | ⏳ 下一步（需要 BeringiaPlatform） |
 | M5 | 第一个 macOS 26 用户态：用 25A353 恢复 ramdisk 启动 `launchd` | ⬜ |
 | M6 | 完整 macOS 26 系统卷，多用户启动，网络、ssh | ⬜ |
 | M7 | 显示与输入，WindowServer | ⬜ |

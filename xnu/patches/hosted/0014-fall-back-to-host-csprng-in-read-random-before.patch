@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 05:35:50 +0800
+Subject: [PATCH 17/17] hosted: fall back to host CSPRNG in read_random before
+ prng_funcs is registered
+
+---
+ osfmk/prng/prng_random.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
+index 9691e7a..6abb8c4 100644
+--- a/osfmk/prng/prng_random.c
++++ b/osfmk/prng/prng_random.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <kern/locks.h>
+ #include <kern/cpu_number.h>
+ #include <libkern/section_keywords.h>
+@@ -420,6 +421,11 @@ random_cpu_init(int cpu)
+ __mockable void
+ read_random(void * buffer, u_int numbytes)
+ {
++	/* BERINGIA: corecrypto has not registered prng_funcs yet (bare hosted kernel); use the host CSPRNG. */
++	if (beringia_hosted() && prng_funcs.refresh == NULL) {
++		beringia_random(buffer, numbytes);
++		return;
++	}
+ 	prng_funcs.refresh(prng_ctx);
+ 	read_random_generate(buffer, numbytes);
+ }
+@@ -449,6 +455,10 @@ read_random_generate(uint8_t *buffer, size_t numbytes)
+ {
+ 	ensure_gsbase();
+ 
++	if (beringia_hosted() && prng_funcs.generate == NULL) {
++		beringia_random(buffer, numbytes);
++		return;
++	}
+ 	while (numbytes > 0) {
+ 		size_t n = MIN(numbytes, CCKPRNG_GENERATE_MAX_NBYTES);
+ 

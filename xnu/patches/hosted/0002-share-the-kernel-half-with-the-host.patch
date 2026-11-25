@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 03:06:10 +0800
+Subject: [PATCH 05/17] hosted: share the kernel half with the host
+
+When hosted, IdlePDPT carries the host's PML4[511] PDPT entries 510/511
+(its kernel image, modules and fixmap, where the world switch lives), the
+physmap and double-map PML4 slots are the ones the host left free, the
+physmap reaches the top of hosted RAM, and the kernel virtual space ends
+below the host's region of slot 511. KERNEL_DBLMAP_PML4_INDEX becomes a
+variable for that.
+---
+ osfmk/i386/i386_init.c | 23 +++++++++++++++++++++++
+ osfmk/i386/pmap.h      |  3 ++-
+ osfmk/x86_64/pmap.c    |  6 ++++++
+ 3 files changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/osfmk/i386/i386_init.c b/osfmk/i386/i386_init.c
+index 5012de8..b67afef 100644
+--- a/osfmk/i386/i386_init.c
++++ b/osfmk/i386/i386_init.c
+@@ -66,6 +66,7 @@
+ #include <kern/spl.h>
+ #include <kern/assert.h>
+ #include <kern/debug.h>
++#include <beringia_hosted.h>
+ #include <kern/misc_protos.h>
+ #include <kern/startup.h>
+ #include <kern/clock.h>
+@@ -152,6 +153,7 @@ pml4_entry_t            *IdlePML4;
+ 
+ int                     kernPhysPML4Index;
+ int                     kernPhysPML4EntryCount;
++int                     kernDblmapPML4Index = KERNEL_KASAN_PML4_FIRST - 1;
+ 
+ /*
+  * These are 4K mapping page table pages from KPTphys[] that we wound
+@@ -307,6 +309,10 @@ physmap_init(uint8_t phys_random_L3, uint64_t *new_physmap_base, uint64_t *new_p
+ 	 * XXX all enumerated device, then add more for hot-pluggable devices.
+ 	 */
+ 	highest_physaddr = kernelBootArgs->PhysicalMemorySize + 4 * GB;
++	/* BERINGIA: hosted RAM may sit above PhysicalMemorySize + 4 GiB (the host's own RAM is below it) */
++	if (beringia_hosted() && beringia_shared.phys_top > highest_physaddr) {
++		highest_physaddr = beringia_shared.phys_top;
++	}
+ 
+ 	/*
+ 	 * Calculate the number of PML4 entries we'll need.  The total number of entries is
+@@ -331,6 +337,10 @@ physmap_init(uint8_t phys_random_L3, uint64_t *new_physmap_base, uint64_t *new_p
+ 	}
+ 
+ 	kernPhysPML4Index = KERNEL_KEXTS_INDEX - kernPhysPML4EntryCount;        /* utb: KERNEL_PHYSMAP_PML4_INDEX */
++	/* BERINGIA: the host picks PML4 slots it does not use itself */
++	if (beringia_hosted() && beringia_shared.physmap_pml4) {
++		kernPhysPML4Index = (int)beringia_shared.physmap_pml4;
++	}
+ 
+ 	/*
+ 	 * XXX: Make sure that the addresses returned for physmapL3 and physmapL2 plus their extents
+@@ -411,6 +421,16 @@ Idle_PTs_init(void)
+ 	fillkpt(IdlePML4 + KERNEL_PML4_INDEX,
+ 	    INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(IdlePDPT), 0, 1);
+ 
++	/*
++	 * BERINGIA: the host's kernel image, modules and fixmap share PML4 slot 511 with XNU, at PDPT entries 510 and
++	 * 511; its world switch and host-call trampolines live there and must be mapped in every XNU address space.
++	 * User pmaps share IdlePDPT through their copy of PML4[KERNEL_PML4_INDEX].
++	 */
++	if (beringia_hosted()) {
++		IdlePDPT[510] = beringia_shared.linux_pdpt_510;
++		IdlePDPT[511] = beringia_shared.linux_pdpt_511;
++	}
++
+ 	postcode(VSTART_PHYSMAP_INIT);
+ 
+ 	/*
+@@ -1149,6 +1169,9 @@ extern uint64_t idt64_hndl_table0[];
+ void
+ doublemap_init(uint8_t randL3)
+ {
++	if (beringia_hosted() && beringia_shared.dblmap_pml4) {
++		kernDblmapPML4Index = (int)beringia_shared.dblmap_pml4;
++	}
+ 	dblmapL3 = ALLOCPAGES(1); // for 512 1GiB entries
+ 	dblallocs++;
+ 
+diff --git a/osfmk/i386/pmap.h b/osfmk/i386/pmap.h
+index 6ef6e17..6a7ad49 100644
+--- a/osfmk/i386/pmap.h
++++ b/osfmk/i386/pmap.h
+@@ -209,7 +209,8 @@ extern int      kernPhysPML4EntryCount;
+ /* 2 PML4s for KASAN to cover a maximum of 16 PML4s {PHYSMAP + BASEMENT + KVA} */
+ #define KERNEL_KASAN_PML4_LAST          (495) /* 511 - 16 */
+ #define KERNEL_KASAN_PML4_FIRST         (494) /* 511 - 17 */
+-#define KERNEL_DBLMAP_PML4_INDEX        (KERNEL_KASAN_PML4_FIRST - 1)
++#define KERNEL_DBLMAP_PML4_INDEX        (kernDblmapPML4Index)      /* BERINGIA: chosen at boot when hosted */
++extern int      kernDblmapPML4Index;
+ #define KERNEL_PML4_COUNT               1
+ #define KERNEL_BASE                     (0ULL - (NBPML4 * KERNEL_PML4_COUNT))
+ #define KERNEL_BASEMENT                 (KERNEL_BASE - NBPML4)  /* Basement uses one PML4 entry */
+diff --git a/osfmk/x86_64/pmap.c b/osfmk/x86_64/pmap.c
+index 33b1f20..b121737 100644
+--- a/osfmk/x86_64/pmap.c
++++ b/osfmk/x86_64/pmap.c
+@@ -88,6 +88,7 @@
+  *	and to when physical maps must be made correct.
+  */
+ 
++#include <beringia_hosted.h>
+ #include <string.h>
+ #include <mach_ldebug.h>
+ 
+@@ -572,6 +573,11 @@ pmap_bootstrap(
+ 		printf("EFI32: kernel virtual space limited to 4GB\n");
+ 		virtual_end = VM_MAX_KERNEL_ADDRESS_EFI32;
+ 	}
++	/* BERINGIA: the top of PML4 slot 511 is the host's (its kernel image, modules, fixmap) */
++	if (beringia_hosted() && beringia_shared.kva_ceiling && virtual_end >= beringia_shared.kva_ceiling) {
++		virtual_end = beringia_shared.kva_ceiling - PAGE_SIZE;
++		vm_last_addr = virtual_end;
++	}
+ 	kprintf("Kernel virtual space from 0x%lx to 0x%lx.\n",
+ 	    (long)KERNEL_BASE, (long)virtual_end);
+ 	kprintf("Available physical space from 0x%llx to 0x%llx\n",

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: APSL-2.0
+obj-m += beringia_xnu.o
+beringia_xnu-y := main.o macho.o boot.o hostcalls.o
+ccflags-y += -I$(src)/../host/include -I$(src)/../xnu/include

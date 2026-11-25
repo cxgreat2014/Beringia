@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 03:28:02 +0800
+Subject: [PATCH 07/17] hosted: map unknown modern Intel models to a supported
+ cpufamily
+
+---
+ osfmk/i386/cpuid.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/osfmk/i386/cpuid.c b/osfmk/i386/cpuid.c
+index 7460cfa..08cbc0f 100644
+--- a/osfmk/i386/cpuid.c
++++ b/osfmk/i386/cpuid.c
+@@ -28,6 +28,7 @@
+ /*
+  * @OSF_COPYRIGHT@
+  */
++#include <beringia_hosted.h>
+ #include <vm/vm_page.h>
+ #include <pexpert/pexpert.h>
+ 
+@@ -933,6 +934,13 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
+ 		case CPUID_MODEL_COMETLAKE_DT:
+ 			cpufamily = CPUFAMILY_INTEL_COMETLAKE;
+ 			break;
++		default:
++			/* BERINGIA: CPUs newer than XNU knows (Alder/Raptor Lake, model >= 0x97) are presented as the
++			 * closest supported desktop family; the features we run on are a subset. */
++			if (beringia_hosted() && info_p->cpuid_model >= 0x97) {
++				cpufamily = CPUFAMILY_INTEL_COMETLAKE;
++			}
++			break;
+ 		}
+ 		break;
+ 	}

@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 05:13:02 +0800
+Subject: [PATCH 15/17] hosted: fall back to the host CSPRNG before corecrypto
+ registers
+
+---
+ EXTERNAL_HEADERS/beringia_hosted.h |  1 +
+ libkern/crypto/corecrypto_rand.c   | 27 ++++++++++++++++++++++++---
+ osfmk/x86_64/beringia.c            | 24 ++++++++++++++++++++++++
+ 3 files changed, 49 insertions(+), 3 deletions(-)
+
+diff --git a/EXTERNAL_HEADERS/beringia_hosted.h b/EXTERNAL_HEADERS/beringia_hosted.h
+index 830adae..d102bf0 100644
+--- a/EXTERNAL_HEADERS/beringia_hosted.h
++++ b/EXTERNAL_HEADERS/beringia_hosted.h
+@@ -62,6 +62,7 @@ beringia_cpu(void)
+ long beringia_call(unsigned long nr, unsigned long a1, unsigned long a2);
+ void beringia_console_putc(char c);
+ void beringia_console_write(const char *s, unsigned long len);
++void beringia_random(void *out, unsigned long len);
+ void beringia_panic(const char *msg) __attribute__((noreturn));
+ 
+ #endif /* _BERINGIA_HOSTED_H_ */
+diff --git a/libkern/crypto/corecrypto_rand.c b/libkern/crypto/corecrypto_rand.c
+index d46815b..2a1ef41 100644
+--- a/libkern/crypto/corecrypto_rand.c
++++ b/libkern/crypto/corecrypto_rand.c
+@@ -27,6 +27,7 @@
+  */
+ 
+ #include <libkern/crypto/crypto_internal.h>
++#include <beringia_hosted.h>
+ #include <corecrypto/ccrng.h>
+ #include <libkern/crypto/rand.h>
+ 
+@@ -41,6 +42,10 @@ cc_rand_generate(void *out, size_t outlen)
+ 		if (rng_state != NULL) {
+ 			error = ccrng_generate(rng_state, outlen, out);
+ 		}
++	} else if (beringia_hosted()) {
++		/* BERINGIA: no corecrypto kext yet; use the host CSPRNG. */
++		beringia_random(out, outlen);
++		error = 0;
+ 	}
+ 
+ 	return error;
+@@ -58,7 +63,11 @@ crypto_random_generate(
+ 	void *random,
+ 	size_t random_size)
+ {
+-	g_crypto_funcs->random_generate_fn(ctx, random, random_size);
++	if (g_crypto_funcs) {
++		g_crypto_funcs->random_generate_fn(ctx, random, random_size);
++	} else if (beringia_hosted()) {
++		beringia_random(random, random_size);
++	}
+ }
+ 
+ void
+@@ -67,12 +76,22 @@ crypto_random_uniform(
+ 	uint64_t bound,
+ 	uint64_t *random)
+ {
+-	g_crypto_funcs->random_uniform_fn(ctx, bound, random);
++	if (g_crypto_funcs) {
++		g_crypto_funcs->random_uniform_fn(ctx, bound, random);
++	} else if (beringia_hosted()) {
++		uint64_t r = 0;
++		beringia_random(&r, sizeof(r));
++		*random = bound ? r % bound : 0;
++	}
+ }
+ 
+ size_t
+ crypto_random_kmem_ctx_size(void)
+ {
++	/* BERINGIA: no corecrypto yet, no kmem RNG context to allocate. */
++	if (!g_crypto_funcs) {
++		return 0;
++	}
+ 	return g_crypto_funcs->random_kmem_ctx_size_fn();
+ }
+ 
+@@ -80,5 +99,7 @@ void
+ crypto_random_kmem_init(
+ 	crypto_random_ctx_t ctx)
+ {
+-	g_crypto_funcs->random_kmem_init_fn(ctx);
++	if (g_crypto_funcs) {
++		g_crypto_funcs->random_kmem_init_fn(ctx);
++	}
+ }
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+index b36ca1b..c3ad791 100644
+--- a/osfmk/x86_64/beringia.c
++++ b/osfmk/x86_64/beringia.c
+@@ -29,6 +29,7 @@
+  * BERINGIA: host calls and the hosted console (see beringia_hosted.h and the Beringia ABI, beringia/abi.h).
+  */
+ #include <beringia_hosted.h>
++#include <string.h>
+ 
+ /* Set by the loader before vstart runs; 0 means not hosted. */
+ uint64_t beringia_hook = 0;
+@@ -105,3 +106,26 @@ beringia_panic(const char *msg)
+ 		__asm__ volatile ("cli; hlt");
+ 	}
+ }
++
++/*
++ * Random bytes from the host CSPRNG, for the hosted build before the corecrypto kext registers (g_crypto_funcs is
++ * NULL then). The host call reads a physical address, so bounce through a buffer in the kernel image, whose physical
++ * address is (VA - KERNEL_BASE).
++ */
++static uint8_t beringia_rng_bounce[256] __attribute__((aligned(64)));
++
++void
++beringia_random(void *out, unsigned long len)
++{
++	uint8_t *o = out;
++
++	while (len) {
++		unsigned long n = len > sizeof(beringia_rng_bounce) ? sizeof(beringia_rng_bounce) : len;
++		uint64_t pa = (uint64_t)(uintptr_t)beringia_rng_bounce - 0xffffff8000000000ULL;
++
++		beringia_call(BERINGIA_CALL_RANDOM, pa, n);
++		memcpy(o, beringia_rng_bounce, n);
++		o += n;
++		len -= n;
++	}
++}

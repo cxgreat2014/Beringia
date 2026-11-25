@@ -1,0 +1,14 @@
+# M2 boot evidence: hosted XNU reaches IOKit platform matching (WSL2 x86_64)
+# XNU (xnu-12377.1.9, macOS 26.0) booted via beringia_host.ko + beringia_xnu.ko
+xnu: entering vstart at 0xffffff80205a3d60 (stack 0xffffff80201ad000, CR3 0x21c7a000)
+xnu0: kernel_startup_initialize_upto: reached phase 4
+xnu0: kernel_startup_initialize_upto: reached phase 5
+xnu0: kernel_startup_initialize_upto: reached phase 6
+xnu0: BERINGIA panic:Unable to find driver for this platform: "Beringia1,1". @IOPlatformExpert.cpp:2365
+xnu0: panic(cpu 0 caller 0xffffff8020bce7cd): Unable to find driver for this platform: "Beringia1,1". @IOPlatformExpert.cpp:2365
+# tail:
+xnu0: 0xffffffee20097ef0 : 0xffffff8020b81c3c mach_kernel : _last_kernel_symbol + 0x1f8f1c3c
+xnu0: Mac OS version:
+xnu0:   Zone map: 0xffffff8aaf76c000 - 0xffffffaaaf76c000
+xnu0: ** In Memory Panic Stackshot Succeeded ** Bytes Traced 2742 (Uncompressed 7264) **
+xnu0: Attempting to commit panic log to NVRAM

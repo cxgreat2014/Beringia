@@ -7,9 +7,9 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
 |---|---|---|---|
 | M0 | Reproducible XNU build on Linux | `scripts/xnu/build.sh` produces `kernel.development` (x86_64, `xnu-12377.1.9`) from a pristine tag + `xnu/series` | ✅ |
 | M1 | Host foundation | Carve-outs claimed; world-switch self-test: enter a test world (own CR3/GDT/IDT/TSS), take and forward a Linux timer interrupt, return, 10⁶ round trips without a Linux warning | ✅ |
-| M2 | XNU early boot | `vstart` → `i386_init` → `kernel_bootstrap_thread`; XNU's console and panics reach the host log | ⏳ |
-| M3 | Time, idle, CPUs | Scheduler runs with a host timer; idle sleeps in Linux; 1 then N hosted CPUs with IPIs; no RCU stall / soft lockup over 10 min | ⬜ |
-| M4 | Platform & kernel collection | `BeringiaPlatform`/`BeringiaCPU` kexts; KC built on Linux from Beringia's kernel + 25A353 Apple kexts; IOKit reaches "waiting for root device" | ⬜ |
+| M2 | XNU early boot | `vstart` → `i386_init` → `kernel_bootstrap_thread`; XNU's console and panics reach the host log | ✅ |
+| M3 | Time, idle, CPUs | Scheduler runs with a host timer; idle sleeps in Linux; 1 then N hosted CPUs with IPIs; no RCU stall / soft lockup over 10 min | 🔨 (single CPU: host timer + idle work; SMP not done) |
+| M4 | Platform & kernel collection | `BeringiaPlatform`/`BeringiaCPU` kexts; KC built on Linux from Beringia's kernel + 25A353 Apple kexts; IOKit reaches "waiting for root device" | ⏳ next (XNU reaches IOKit platform matching; needs `BeringiaPlatform`) |
 | M5 | First macOS 26 userspace | `BeringiaDisk` + 25A353 recovery ramdisk as root; `launchd` (PID 1) starts and runs a shell | ⬜ |
 | M6 | Full macOS 26 system | System volume built from the 25A353 OTA payload; multi-user boot; console login; network (`BeringiaNet`), `ssh` into macOS | ⬜ |
 | M7 | Display & input | Framebuffer + input kexts; WindowServer and loginwindow on the CPU renderer; screenshot from the host | ⬜ |
@@ -23,7 +23,14 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
   selectors, MSRs, XSAVE state) on 6 CPUs for 30 s: 10.9 M world round trips, 10.9 M exceptions taken by the foreign
   IDT, 23 649 Linux interrupts (Hyper-V timer, VMBus, IPIs) forwarded to Linux, no kernel warning
   ([tests/results/m1-selftest.log](tests/results/m1-selftest.log), `sudo scripts/run/selftest.sh 30 6`).
-- M2 is next: the loader (`loader/`) and the first hosted XNU patches.
+- M2 is done: `beringia_xnu.ko` loads the kernel (Mach-O, slid headers, local relocations), and hosted XNU boots
+  through `vstart`, `i386_init`, the whole memory subsystem (pmap, VM bootstrap, zones) and the scheduler into
+  **IOKit platform matching** (`PE_init_iokit` → phase 17). Console output and full panic backtraces reach the host
+  log (`dmesg` and the synchronous `/mnt/c` trace). Hosted patches cover: the shared kernel half, TSC frequency from
+  the host, a fake LAPIC page, interrupt forwarding, host timer + idle, a host CSPRNG fallback for early boot, and
+  ending the run on panic instead of resetting the VM.
+- M4 is next: a `BeringiaPlatform` (`IOPlatformExpert`) so IOKit matches the hosted platform instead of panicking
+  with "Unable to find driver for this platform".
 
 ## Known open questions
 

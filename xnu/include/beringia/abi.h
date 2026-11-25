@@ -68,6 +68,7 @@ struct beringia_shared {
 	unsigned int physmap_pml4;          /* PML4 slot for XNU's physmap (free in Linux's tables) */
 	unsigned int dblmap_pml4;           /* PML4 slot for XNU's double map */
 	unsigned long long kva_ceiling;     /* XNU must not map kernel VAs at or above this (Linux's region in slot 511) */
+	unsigned long long phys_top;        /* highest physical address (exclusive) of XNU's RAM: the physmap covers it */
 	/* per CPU */
 	struct beringia_cpu_shared cpu[BERINGIA_MAX_CPUS];
 };

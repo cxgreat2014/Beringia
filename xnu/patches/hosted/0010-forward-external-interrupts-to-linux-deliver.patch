@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 04:43:24 +0800
+Subject: [PATCH 13/17] hosted: forward external interrupts to Linux, deliver
+ pending timer/IPI
+
+---
+ osfmk/i386/trap.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index eef1043..3ce6f23 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -348,6 +348,12 @@ uint64_t interrupt_coalesced_timers;
+  *  - local APIC interrupts (IPIs, timers, etc) are handled by the kernel,
+  *  - device interrupts go to the platform expert.
+  */
++#if defined(__x86_64__)
++/* BERINGIA: delivered from the hosted interrupt path (declared here to avoid pulling in arch headers early). */
++extern int rtclock_intr(x86_saved_state_t *regs);
++extern int cpu_signal_handler(x86_saved_state_t *regs);
++#endif
++
+ void
+ interrupt(x86_saved_state_t *state)
+ {
+@@ -370,6 +376,27 @@ interrupt(x86_saved_state_t *state)
+ 		user_mode = TRUE;
+ 	}
+ 
++	/*
++	 * BERINGIA: every external interrupt is the host's (Linux owns the LAPIC, IOAPIC and devices). Re-deliver the
++	 * vector to Linux, then run whatever the host marked pending for this XNU CPU (its timer, IPIs from other XNU
++	 * CPUs) in this same interrupt context. XNU's normal return path then takes care of ASTs and preemption.
++	 */
++	if (beringia_hosted()) {
++		unsigned int pending;
++
++		beringia_call(BERINGIA_CALL_FORWARD_IRQ, interrupt_num, 0);
++		pending = beringia_shared.cpu[beringia_cpu()].pending;
++		if (pending & BERINGIA_PENDING_TIMER) {
++			beringia_shared.cpu[beringia_cpu()].pending &= ~BERINGIA_PENDING_TIMER;
++			rtclock_intr(state);
++		}
++		if (pending & BERINGIA_PENDING_IPI) {
++			beringia_shared.cpu[beringia_cpu()].pending &= ~BERINGIA_PENDING_IPI;
++			cpu_signal_handler(state);
++		}
++		return;
++	}
++
+ #if DEVELOPMENT || DEBUG
+ 	uint64_t frameptr = is_saved_state64(state) ? state64->rbp : saved_state32(state)->ebp;
+ 	uint32_t traptrace_index = traptrace_start(interrupt_num, rip, mach_absolute_time(), frameptr);

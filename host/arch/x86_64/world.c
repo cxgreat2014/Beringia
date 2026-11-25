@@ -207,7 +207,11 @@ long bh_world_run(int index, u64 cr3, u64 rip, u64 rsp, u64 rdi, u64 rsi,
 	w->x_star = w->l_star;
 	w->x_sfmask = w->l_sfmask;
 	w->x_xcr0 = w->l_xcr0;
-	w->x_cr0 = w->l_cr0;
+	/*
+	 * CR0: the foreign kernel uses SSE in kernel mode, so TS and EM must be clear or its first SSE instruction
+	 * raises #NM (Linux runs with TS set for lazy FPU switching; XNU's own #NM path expects a user task).
+	 */
+	w->x_cr0 = w->l_cr0 & ~(u64)(X86_CR0_TS | X86_CR0_EM);
 	r = bh_world_enter(w);
 	/* back for good: bh_world_dispatch has already given the FPU back */
 	preempt_enable();

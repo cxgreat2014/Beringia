@@ -1,4 +1,18 @@
 # Applied in order onto apple-oss-distributions/xnu tag xnu-12377.1.9 (scripts/xnu/prepare.sh).
-build/0001-linux-host-build-support.patch
-build/0002-upstream-llvm-compat.patch
-build/0003-private-header-stand-ins.patch
+build/0001-build-xnu-on-a-linux-host-droidvm-build.patch
+build/0002-upstream-llvm-has-no-builtin-xnu-type.patch
+build/0003-stand-ins-for-private-headers-and-symbols-the.patch
+hosted/0001-beringia-host-calls-console-and-panic-report.patch
+hosted/0002-share-the-kernel-half-with-the-host.patch
+hosted/0003-tsc-frequency-from-the-host.patch
+hosted/0004-map-unknown-modern-intel-models-to-a-supported.patch
+hosted/0005-report-a-bare-hosted-kernel-as-kcformatstatic.patch
+hosted/0006-print-the-panic-backtrace-before-halting.patch
+hosted/0007-guard-kalloc-type-zone-creation-against-zero.patch
+hosted/0008-report-the-host-cpu-count-instead-of-reading.patch
+hosted/0009-give-xnu-a-fake-lapic-page-instead-of-the-host.patch
+hosted/0010-forward-external-interrupts-to-linux-deliver.patch
+hosted/0011-route-the-tsc-deadline-timer-and-idle-to-the.patch
+hosted/0012-fall-back-to-the-host-csprng-before-corecrypto.patch
+hosted/0013-end-the-run-on-halt-reboot-instead-of-resetting.patch
+hosted/0014-fall-back-to-host-csprng-in-read-random-before.patch

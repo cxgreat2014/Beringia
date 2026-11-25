@@ -1,0 +1,305 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 03:01:40 +0800
+Subject: [PATCH 04/17] hosted: Beringia host calls, console and panic report
+
+beringia_hook (set by the loader) marks a hosted kernel; beringia_call() is
+the host-call entry. The serial driver becomes the host console when hosted
+(kprintf and the serial console), and panic_trap_to_debugger hands the
+formatted message to the host, which ends the run.
+---
+ EXTERNAL_HEADERS/beringia_hosted.h |  67 ++++++++++++++++++
+ osfmk/conf/files.x86_64            |   1 +
+ osfmk/kern/debug.c                 |  21 ++++++
+ osfmk/x86_64/beringia.c            | 107 +++++++++++++++++++++++++++++
+ pexpert/i386/pe_serial.c           |  29 ++++++++
+ 5 files changed, 225 insertions(+)
+ create mode 100644 EXTERNAL_HEADERS/beringia_hosted.h
+ create mode 100644 osfmk/x86_64/beringia.c
+
+diff --git a/EXTERNAL_HEADERS/beringia_hosted.h b/EXTERNAL_HEADERS/beringia_hosted.h
+new file mode 100644
+index 0000000..830adae
+--- /dev/null
++++ b/EXTERNAL_HEADERS/beringia_hosted.h
+@@ -0,0 +1,67 @@
++/*
++ * Copyright (c) 2026 Beringia contributors. All rights reserved.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. The rights granted to you under the License
++ * may not be used to create, or enable the creation or redistribution of,
++ * unlawful or unlicensed copies of an Apple operating system, or to
++ * circumvent, violate, or enable the circumvention or violation of, any
++ * terms of an Apple operating system software license agreement.
++ *
++ * Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
++ */
++/*
++ * BERINGIA: XNU hosted inside Linux (https://github.com/cxgreat2014/Beringia).
++ *
++ * When the loader sets beringia_hook before entering vstart, this kernel runs as a guest of the Linux host in the
++ * same CPU privilege level: it owns its page tables, descriptor tables and MSRs while it runs (the host switches them),
++ * but hardware it would normally program (LAPIC, IOAPIC, serial ports, MTRRs, ACPI) belongs to Linux. The hosted paths
++ * are all guarded by beringia_hosted(); with beringia_hook == 0 the kernel behaves as stock XNU.
++ */
++#ifndef _BERINGIA_HOSTED_H_
++#define _BERINGIA_HOSTED_H_
++
++#include <stdint.h>
++#include <stdbool.h>
++#include <beringia/abi.h>
++
++extern uint64_t beringia_hook;
++extern struct beringia_shared beringia_shared;
++
++static inline bool
++beringia_hosted(void)
++{
++	return beringia_hook != 0;
++}
++
++/* This CPU's host index: the host keeps it in IA32_TSC_AUX while XNU runs (valid before %gs is set up). */
++static inline unsigned int
++beringia_cpu(void)
++{
++	uint64_t aux;
++
++	__asm__ volatile (".byte 0xf3, 0x0f, 0xc7, 0xf8" : "=a"(aux));     /* rdpid %rax */
++	return (unsigned int)(aux & 0xffff);
++}
++
++long beringia_call(unsigned long nr, unsigned long a1, unsigned long a2);
++void beringia_console_putc(char c);
++void beringia_console_write(const char *s, unsigned long len);
++void beringia_panic(const char *msg) __attribute__((noreturn));
++
++#endif /* _BERINGIA_HOSTED_H_ */
+diff --git a/osfmk/conf/files.x86_64 b/osfmk/conf/files.x86_64
+index e250470..96c5aef 100644
+--- a/osfmk/conf/files.x86_64
++++ b/osfmk/conf/files.x86_64
+@@ -118,3 +118,4 @@ osfmk/i386/panic_notify.c	standard
+ osfmk/x86_64/machine_remote_time.c 		optional config_mach_bridge_send_time
+ osfmk/x86_64/counter.c		standard
+ osfmk/x86_64/static_if.c	standard
++osfmk/x86_64/beringia.c	standard
+diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
+index dfe70a7..7e96529 100644
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -55,6 +55,9 @@
+  */
+ 
+ #include <mach_assert.h>
++#if defined(__x86_64__)
++#include <beringia_hosted.h>
++#endif
+ #include <mach_kdp.h>
+ #include <kdp/kdp.h>
+ #include <kdp/kdp_core.h>
+@@ -1217,6 +1220,24 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
+ {
+ #pragma clang diagnostic pop
+ 
++#if defined(__x86_64__)
++	if (beringia_hosted()) {
++		/* BERINGIA: the formatted panic message to the host, which ends the run. */
++		static char beringia_panic_buf[1024];
++		const char *msg = panic_format_str ? panic_format_str : "panic";
++
++		if (panic_args != NULL && panic_format_str != NULL) {
++			va_list ap;
++
++			va_copy(ap, *panic_args);
++			vsnprintf(beringia_panic_buf, sizeof(beringia_panic_buf), panic_format_str, ap);
++			va_end(ap);
++			msg = beringia_panic_buf;
++		}
++		beringia_panic(msg);
++	}
++#endif
++
+ #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
+ 	read_lbr();
+ #endif
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+new file mode 100644
+index 0000000..b36ca1b
+--- /dev/null
++++ b/osfmk/x86_64/beringia.c
+@@ -0,0 +1,107 @@
++/*
++ * Copyright (c) 2026 Beringia contributors. All rights reserved.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. The rights granted to you under the License
++ * may not be used to create, or enable the creation or redistribution of,
++ * unlawful or unlicensed copies of an Apple operating system, or to
++ * circumvent, violate, or enable the circumvention or violation of, any
++ * terms of an Apple operating system software license agreement.
++ *
++ * Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
++ */
++/*
++ * BERINGIA: host calls and the hosted console (see beringia_hosted.h and the Beringia ABI, beringia/abi.h).
++ */
++#include <beringia_hosted.h>
++
++/* Set by the loader before vstart runs; 0 means not hosted. */
++uint64_t beringia_hook = 0;
++/* Filled by the loader (boot facts) and the host (per-CPU pending words). */
++struct beringia_shared beringia_shared __attribute__((aligned(4096)));
++
++static unsigned int beringia_console_pos[BERINGIA_MAX_CPUS];
++
++long
++beringia_call(unsigned long nr, unsigned long a1, unsigned long a2)
++{
++	long r;
++
++	/* SysV call: the host preserves rbx, rbp, r12-r15, the FPU state and the interrupt flag */
++	__asm__ volatile ("call *%[hook]"
++            : "=a"(r), "+D"(nr), "+S"(a1), "+d"(a2)
++            : [hook] "r"(beringia_hook)
++            : "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
++	return r;
++}
++
++static void
++beringia_console_flush(unsigned int cpu)
++{
++	if (beringia_console_pos[cpu]) {
++		beringia_call(BERINGIA_CALL_CONSOLE, cpu, beringia_console_pos[cpu]);
++		beringia_console_pos[cpu] = 0;
++	}
++}
++
++/* One character of console output; a line goes to the host when it ends (or fills the buffer). */
++void
++beringia_console_putc(char c)
++{
++	unsigned int cpu = beringia_cpu() % BERINGIA_MAX_CPUS;
++	struct beringia_cpu_shared *s = &beringia_shared.cpu[cpu];
++
++	if (c == '\r') {
++		return;
++	}
++	if (c == '\n') {
++		beringia_console_flush(cpu);
++		return;
++	}
++	s->console[beringia_console_pos[cpu]++] = c;
++	if (beringia_console_pos[cpu] >= sizeof(s->console) - 1) {
++		beringia_console_flush(cpu);
++	}
++}
++
++void
++beringia_console_write(const char *str, unsigned long len)
++{
++	while (len--) {
++		beringia_console_putc(*str++);
++	}
++}
++
++/* A panic: its message to the host, which ends the run. */
++void
++beringia_panic(const char *msg)
++{
++	unsigned int cpu = beringia_cpu() % BERINGIA_MAX_CPUS;
++	struct beringia_cpu_shared *s = &beringia_shared.cpu[cpu];
++	unsigned long n = 0;
++
++	beringia_console_flush(cpu);
++	while (msg && msg[n] && n < sizeof(s->console) - 1) {
++		s->console[n] = msg[n];
++		n++;
++	}
++	beringia_call(BERINGIA_CALL_PANIC, cpu, n);
++	for (;;) {
++		__asm__ volatile ("cli; hlt");
++	}
++}
+diff --git a/pexpert/i386/pe_serial.c b/pexpert/i386/pe_serial.c
+index 5e62f29..6f01170 100644
+--- a/pexpert/i386/pe_serial.c
++++ b/pexpert/i386/pe_serial.c
+@@ -34,6 +34,7 @@
+ #include <machine/machine_routines.h>
+ #include <pexpert/protos.h>
+ #include <pexpert/pexpert.h>
++#include <beringia_hosted.h>
+ 
+ struct pe_serial_functions {
+ 	void            (*uart_init) (void);
+@@ -589,11 +590,39 @@ static struct pe_serial_functions pcie_mmio_uart_serial_functions = {
+ // Generic serial support below
+ // =============================================================================
+ 
++#if defined(__x86_64__)
++/* BERINGIA: hosted, the console is the host's (no UART of ours; Linux owns the machine's). */
++static void beringia_uart_init(void) { }
++static void beringia_uart_set_baud_rate(__unused int unit, __unused uint32_t baud_rate) { }
++static int beringia_uart_tr0(void) { return 1; }
++static void beringia_uart_td0(int c) { beringia_console_putc((char)c); }
++static int beringia_uart_rr0(void) { return 0; }
++static int beringia_uart_rd0(void) { return 0; }
++
++static struct pe_serial_functions beringia_serial_functions = {
++	.uart_init = beringia_uart_init,
++	.uart_set_baud_rate = beringia_uart_set_baud_rate,
++	.tr0 = beringia_uart_tr0,
++	.td0 = beringia_uart_td0,
++	.rr0 = beringia_uart_rr0,
++	.rd0 = beringia_uart_rd0
++};
++#endif
++
+ int
+ serial_init( void )
+ {
+ 	unsigned new_uart_baud_rate = 0;
+ 
++#if defined(__x86_64__)
++	if (beringia_hosted()) {
++		gPESF = &beringia_serial_functions;
++		uart_initted = 1;
++		legacy_uart_enabled = 1;
++		return 1;
++	}
++#endif
++
+ 	if (PE_parse_boot_argn("serialbaud", &new_uart_baud_rate, sizeof(new_uart_baud_rate))) {
+ 		/* Valid divisor? */
+ 		if (!((LEGACY_UART_CLOCK / 16) % new_uart_baud_rate)) {

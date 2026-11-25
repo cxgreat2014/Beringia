@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 03:37:08 +0800
+Subject: [PATCH 09/17] hosted: print the panic backtrace before halting
+
+---
+ osfmk/kern/debug.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
+index 7e96529..ed1bfc6 100644
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -1222,7 +1222,8 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
+ 
+ #if defined(__x86_64__)
+ 	if (beringia_hosted()) {
+-		/* BERINGIA: the formatted panic message to the host, which ends the run. */
++		/* BERINGIA: log the panic reason, then let the normal panic path run so its backtrace (built from the
++		 * trap frame) reaches the hosted console. The run ends in panic_spin_forever(). */
+ 		static char beringia_panic_buf[1024];
+ 		const char *msg = panic_format_str ? panic_format_str : "panic";
+ 
+@@ -1234,7 +1235,9 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
+ 			va_end(ap);
+ 			msg = beringia_panic_buf;
+ 		}
+-		beringia_panic(msg);
++		beringia_console_write("\nBERINGIA panic: ", 16);
++		beringia_console_write(msg, strlen(msg));
++		beringia_console_write("\n", 1);
+ 	}
+ #endif
+ 
+@@ -1345,6 +1348,12 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
+ void __attribute__((noinline, optnone))
+ panic_spin_forever(void)
+ {
++#if defined(__x86_64__)
++	/* BERINGIA: the panic log (with the backtrace) has been printed by now; end the run on the host. */
++	if (beringia_hosted()) {
++		beringia_panic("panic");
++	}
++#endif
+ 	for (;;) {
+ #if defined(__arm__) || defined(__arm64__)
+ 		/* On arm32, which doesn't have a WFE timeout, this may not return.  But that should be OK on this path. */

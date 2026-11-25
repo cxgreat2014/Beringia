@@ -1,7 +1,8 @@
-From 8cc60d644f2af82557953a200fc91e045024fa96 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 02:22:43 +0800
-Subject: [PATCH 2/3] build: upstream LLVM has no __builtin_xnu_type_* builtins
+Subject: [PATCH 02/17] build: upstream LLVM has no __builtin_xnu_type_*
+ builtins
 
 ---
  iokit/IOKit/IOLib.h | 4 ++--
@@ -56,6 +57,3 @@ index 065b79d..87e7451 100644
  
  /*
   * Kalloc type flags are adjusted to indicate if the type is "data-only" or
--- 
-2.43.0
-
