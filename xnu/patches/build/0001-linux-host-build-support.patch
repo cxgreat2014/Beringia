@@ -1,0 +1,476 @@
+From a94b323cb80c8f78ff3b61b4a55bad11a0ef55a4 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 02:22:43 +0800
+Subject: [PATCH 1/3] build: build XNU on a Linux host (DroidVM build support)
+
+---
+ Makefile                        | 16 ++++++++++++++++
+ SETUP/config/Makefile           |  9 ++++++++-
+ SETUP/config/doconf             |  2 +-
+ SETUP/decomment/Makefile        |  9 ++++++++-
+ SETUP/installfile/Makefile      |  9 ++++++++-
+ SETUP/kextsymboltool/Makefile   |  9 ++++++++-
+ SETUP/replacecontents/Makefile  |  9 ++++++++-
+ SETUP/setsegname/Makefile       |  9 ++++++++-
+ bsd/conf/Makefile.template      |  2 +-
+ bsd/sys/make_symbol_aliasing.sh |  2 +-
+ iokit/Makefile                  |  6 ++++++
+ iokit/conf/Makefile.template    |  2 +-
+ libkern/conf/Makefile.template  |  2 +-
+ libkern/libkern/Makefile        |  2 +-
+ libsa/conf/Makefile.template    |  2 +-
+ makedefs/MakeInc.cmd            |  4 ++++
+ makedefs/MakeInc.def            | 13 +++++++------
+ makedefs/MakeInc.kernel         |  3 +++
+ makedefs/MakeInc.top            |  2 ++
+ osfmk/conf/Makefile.template    |  2 +-
+ pexpert/conf/Makefile.template  |  2 +-
+ san/conf/Makefile.template      |  2 +-
+ security/conf/Makefile.template |  2 +-
+ 23 files changed, 97 insertions(+), 23 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 24b63f8..574b3b4 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,3 +1,7 @@
++ifeq ($(GUNYAH_LINUX),1)
++include $(GUNYAH_LINUX_MAKEFILE)
++endif
++
+ #
+ # Copyright (C) 1999-2020 Apple Inc. All rights reserved.
+ #
+@@ -143,8 +147,12 @@ installsrc:
+ 
+ else ifneq ($(findstring xnu_tests,$(RC_ProjectName)),)
+ 
++ifneq ($(GUNYAH_LINUX),1)
+ export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
++endif
++ifneq ($(GUNYAH_LINUX),1)
+ export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++endif
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ default: install
+@@ -160,8 +168,12 @@ installsrc:
+ 
+ else ifeq ($(RC_ProjectName),xnu_tests_driverkit)
+ 
++ifneq ($(GUNYAH_LINUX),1)
+ export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
++endif
++ifneq ($(GUNYAH_LINUX),1)
+ export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++endif
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ default: install
+@@ -193,8 +205,12 @@ endif
+ # CPUs. If the system does not support SMT, use N+1.
+ # If MAKEJOBS or -jN is passed on the make line, that takes precedence.
+ #
++ifneq ($(GUNYAH_LINUX),1)
+ export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
++endif
++ifneq ($(GUNYAH_LINUX),1)
+ export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++endif
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ TOP_TARGETS = \
+diff --git a/SETUP/config/Makefile b/SETUP/config/Makefile
+index 52dd350..09d978b 100644
+--- a/SETUP/config/Makefile
++++ b/SETUP/config/Makefile
+@@ -18,9 +18,11 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ config: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -40,3 +42,8 @@ do_build_setup:: config
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+diff --git a/SETUP/config/doconf b/SETUP/config/doconf
+index 39ebe9a..9186483 100755
+--- a/SETUP/config/doconf
++++ b/SETUP/config/doconf
+@@ -1,4 +1,4 @@
+-#!/bin/csh -f
++#!/usr/bin/env -S tcsh -f
+ set path = ($path .)
+ ######################################################################
+ # HISTORY
+diff --git a/SETUP/decomment/Makefile b/SETUP/decomment/Makefile
+index 6d3ffff..69aacbe 100644
+--- a/SETUP/decomment/Makefile
++++ b/SETUP/decomment/Makefile
+@@ -16,9 +16,11 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ decomment: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@ do_build_setup:: decomment
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+diff --git a/SETUP/installfile/Makefile b/SETUP/installfile/Makefile
+index 0e946f8..2738133 100644
+--- a/SETUP/installfile/Makefile
++++ b/SETUP/installfile/Makefile
+@@ -16,9 +16,11 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ installfile: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@ do_build_setup:: installfile
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+diff --git a/SETUP/kextsymboltool/Makefile b/SETUP/kextsymboltool/Makefile
+index 45d7689..b409cde 100644
+--- a/SETUP/kextsymboltool/Makefile
++++ b/SETUP/kextsymboltool/Makefile
+@@ -16,9 +16,11 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -lst
+ 
+ kextsymboltool: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@ do_build_setup:: kextsymboltool
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+diff --git a/SETUP/replacecontents/Makefile b/SETUP/replacecontents/Makefile
+index 016cfec..ce262a1 100644
+--- a/SETUP/replacecontents/Makefile
++++ b/SETUP/replacecontents/Makefile
+@@ -16,9 +16,11 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ replacecontents: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@ do_build_setup:: replacecontents
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+diff --git a/SETUP/setsegname/Makefile b/SETUP/setsegname/Makefile
+index 39607f1..33a1df6 100644
+--- a/SETUP/setsegname/Makefile
++++ b/SETUP/setsegname/Makefile
+@@ -16,9 +16,11 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ setsegname: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@ do_build_setup:: setsegname
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+diff --git a/bsd/conf/Makefile.template b/bsd/conf/Makefile.template
+index 8684c5b..859d0db 100644
+--- a/bsd/conf/Makefile.template
++++ b/bsd/conf/Makefile.template
+@@ -595,7 +595,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/bsd/sys/make_symbol_aliasing.sh b/bsd/sys/make_symbol_aliasing.sh
+index 24fb244..91b2cf5 100755
+--- a/bsd/sys/make_symbol_aliasing.sh
++++ b/bsd/sys/make_symbol_aliasing.sh
+@@ -34,7 +34,7 @@ fi
+ SDKROOT="$1"
+ OUTPUT="$2"
+ 
+-AVAILABILITY_PL="${SDKROOT}/${DRIVERKITROOT}/usr/local/libexec/availability.pl"
++AVAILABILITY_PL="${XNU_AVAILABILITY_PL:-${SDKROOT}/${DRIVERKITROOT}/usr/local/libexec/availability.pl}"
+ 
+ if [ ! -x "${AVAILABILITY_PL}" ] ; then
+     echo "Unable to locate ${AVAILABILITY_PL} (or not executable)" >&2
+diff --git a/iokit/Makefile b/iokit/Makefile
+index 78f8686..0cf8bc9 100644
+--- a/iokit/Makefile
++++ b/iokit/Makefile
+@@ -10,6 +10,12 @@ INSTINC_SUBDIRS = IOKit DriverKit System IOKitUser Exclaves
+ 
+ EXPINC_SUBDIRS = IOKit DriverKit Exclaves
+ 
++ifeq ($(GUNYAH_LINUX_C_SUPPORT),1)
++# Partial C dependency SDK only; never used as complete XNU headers.
++INSTINC_SUBDIRS := $(filter-out DriverKit,$(INSTINC_SUBDIRS))
++EXPINC_SUBDIRS := $(filter-out DriverKit,$(EXPINC_SUBDIRS))
++endif
++
+ COMP_SUBDIRS = conf
+ 
+ include $(MakeInc_rule)
+diff --git a/iokit/conf/Makefile.template b/iokit/conf/Makefile.template
+index 02dfec7..2284995 100644
+--- a/iokit/conf/Makefile.template
++++ b/iokit/conf/Makefile.template
+@@ -209,7 +209,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/libkern/conf/Makefile.template b/libkern/conf/Makefile.template
+index 6ef0911..fcf0a19 100644
+--- a/libkern/conf/Makefile.template
++++ b/libkern/conf/Makefile.template
+@@ -144,7 +144,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/libkern/libkern/Makefile b/libkern/libkern/Makefile
+index f77ce5c..14d29f3 100644
+--- a/libkern/libkern/Makefile
++++ b/libkern/libkern/Makefile
+@@ -116,7 +116,7 @@ EXPORT_MI_DIR = libkern
+ 
+ version.h: version.h.template $(NEWVERS) $(XNU_VERSION)
+ 	@$(LOG_GENERATE) "libkern/$@$(Color0) from $(ColorF)$<"
+-	$(_v)install $(DATA_INSTALL_FLAGS) $< $@
++	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+ 	$(_v)$(NEWVERS) $@ > /dev/null
+ 
+ include $(MakeInc_rule)
+diff --git a/libsa/conf/Makefile.template b/libsa/conf/Makefile.template
+index 3534454..323c3a3 100644
+--- a/libsa/conf/Makefile.template
++++ b/libsa/conf/Makefile.template
+@@ -59,7 +59,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/makedefs/MakeInc.cmd b/makedefs/MakeInc.cmd
+index c9575f3..be13f5f 100644
+--- a/makedefs/MakeInc.cmd
++++ b/makedefs/MakeInc.cmd
+@@ -1,3 +1,7 @@
++ifeq ($(GUNYAH_LINUX),1)
++include $(GUNYAH_LINUX_MAKEFILE)
++endif
++
+ # -*- mode: makefile;-*-
+ #
+ # Copyright (C) 1999-2020 Apple Inc. All rights reserved.
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index cccb411..894e1a5 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -857,7 +857,8 @@ LDFLAGS_KERNEL_GEN = \
+ 	-Wl,-headerpad,152
+ 
+ # LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -lfirehose_kernel
+-LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -L$(SDKROOT)/usr/local/lib/kernel/platform
++export KERNEL_SDKROOT ?= $(SDKROOT)
++LDFLAGS_KERNEL_SDK	= -L$(KERNEL_SDKROOT)/usr/local/lib/kernel -L$(KERNEL_SDKROOT)/usr/local/lib/kernel/platform
+ ifneq ($(KDKROOT),)
+ LDFLAGS_KERNEL_SDK     += -L$(KDKROOT)/usr/local/lib/kernel/platform
+ endif
+@@ -979,8 +980,8 @@ LDFLAGS_KERNEL_PROFILEX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
+ LDFLAGS_KERNEL_GENARM64 = \
+ 	-Wl,-pie \
+ 	-Wl,-static \
+-	-Wl,-segaddr,__PRELINK_TEXT,$(ARM64_PLKSEG_ADDR) \
+-	-Wl,-image_base,$(ARM64_LINK_ADDR) \
++	$(if $(XNU_KC_SEGADDRS),,-Wl,-segaddr,__PRELINK_TEXT,$(ARM64_PLKSEG_ADDR)) \
++	$(if $(XNU_KC_SEGADDRS),$(XNU_KC_SEGADDRS),-Wl,-image_base,$(ARM64_LINK_ADDR)) \
+ 	\
+ 	-Wl,-rename_section,__HIB,__text,__TEXT_EXEC,__hib_text \
+ 	\
+@@ -1150,9 +1151,9 @@ INCFLAGS_IMPORT	= $(patsubst %, -I$(OBJROOT)/EXPORT_HDRS/%, $(COMPONENT_IMPORT_L
+ INCFLAGS_EXTERN	= -I$(SRCROOT)/EXTERNAL_HEADERS
+ INCFLAGS_GEN	= -I$(SRCROOT)/$(COMPONENT) -I$(OBJROOT)/EXPORT_HDRS/$(COMPONENT)
+ INCFLAGS_LOCAL	= -I.
+-INCFLAGS_KERNEL = -I$(SDKROOT)/usr/local/include/kernel
+-INCFLAGS_SDK	= -I$(SDKROOT)/usr/local/include/ -I$(SDKROOT)/$(KPINCDIR)/AppleFeatures
+-INCFLAGS_PLATFORM = -I$(SDKROOT)/$(KPINCDIR)/platform
++INCFLAGS_KERNEL = -I$(KERNEL_SDKROOT)/usr/local/include/kernel
++INCFLAGS_SDK	= -I$(KERNEL_SDKROOT)/usr/local/include/kernel -I$(KERNEL_SDKROOT)/usr/local/include -I$(KERNEL_SDKROOT)/usr/local/include/iBoot -I$(KERNEL_SDKROOT)/$(KPINCDIR)/AppleFeatures
++INCFLAGS_PLATFORM = -I$(KERNEL_SDKROOT)/$(KPINCDIR)/platform
+ ifneq ($(KDKROOT),)
+ INCFLAGS_SDK   += -I$(KDKROOT)/$(KPINCDIR)
+ INCFLAGS_PLATFORM += -I$(KDKROOT)/$(KINCDIR)/platform -I$(KDKROOT)/$(KPINCDIR)/platform
+diff --git a/makedefs/MakeInc.kernel b/makedefs/MakeInc.kernel
+index a544e65..50e9ed6 100644
+--- a/makedefs/MakeInc.kernel
++++ b/makedefs/MakeInc.kernel
+@@ -188,6 +188,9 @@ $(TARGET)/lib$(KERNEL_FILE_NAME).a: $(addprefix $(TARGET)/,$(foreach component,$
+ 	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/lib$(KERNEL_FILE_NAME).a $(OBJROOT)/lib$(KERNEL_FILE_NAME).a
+ endif
+ 
++# Explicit external source archives participate in incremental relinking.
++$(TARGET)/$(KERNEL_FILE_NAME).unstripped.noctf: $(XNU_EXTERNAL_KERNEL_ARCHIVES)
++
+ $(TARGET)/$(KERNEL_FILE_NAME).unstripped.noctf: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o nonlto.o version.o $(LDFILES_KERNEL_ONLY) .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+ ifeq ($(PRE_LTO),1)
+ 	@$(LOG_LTO) "$(@F)"
+diff --git a/makedefs/MakeInc.top b/makedefs/MakeInc.top
+index 964d522..bd290ea 100644
+--- a/makedefs/MakeInc.top
++++ b/makedefs/MakeInc.top
+@@ -298,7 +298,9 @@ endif
+ # $(warning PRIMARY_KERNEL_CONFIGS is $(PRIMARY_KERNEL_CONFIGS))
+ # $(warning VARIANT_CONFIGS is $(VARIANT_CONFIGS))
+ 
++ifneq ($(GUNYAH_LINUX),1)
+ MEMORY_SIZE := $(shell /usr/sbin/sysctl -n hw.memsize)
++endif
+ 
+ # Assume LTO scaling by default, unless it is being explicitly passed on the command-line
+ LARGE_BUILD_FOOTPRINT := $(if $(BUILD_LTO),$(BUILD_LTO),1)
+diff --git a/osfmk/conf/Makefile.template b/osfmk/conf/Makefile.template
+index 949bd1a..6361d78 100644
+--- a/osfmk/conf/Makefile.template
++++ b/osfmk/conf/Makefile.template
+@@ -460,7 +460,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/pexpert/conf/Makefile.template b/pexpert/conf/Makefile.template
+index 3711a92..d160850 100644
+--- a/pexpert/conf/Makefile.template
++++ b/pexpert/conf/Makefile.template
+@@ -78,7 +78,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/san/conf/Makefile.template b/san/conf/Makefile.template
+index a4e1d9f..32f90cd 100644
+--- a/san/conf/Makefile.template
++++ b/san/conf/Makefile.template
+@@ -55,7 +55,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+diff --git a/security/conf/Makefile.template b/security/conf/Makefile.template
+index 34f0df5..0172ed6 100644
+--- a/security/conf/Makefile.template
++++ b/security/conf/Makefile.template
+@@ -81,7 +81,7 @@ $(COBJS): .CFLAGS
+ 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
+ $(CXXOBJS): .CXXFLAGS
+ .CXXFLAGS: ALWAYS
+-	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CXXFLAGS) $(INCFLAGS)
++	$(_v)$(REPLACECONTENTS) $@ $(KC++) $(CFLAGS) $(CXXFLAGS) $(INCFLAGS)
+ $(SOBJS): .SFLAGS
+ .SFLAGS: ALWAYS
+ 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
+-- 
+2.43.0
+

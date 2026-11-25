@@ -1,0 +1,12 @@
+{
+  "25A353-full": {
+    "comment": "macOS 26.0 (25A353) full OTA for all supported Macs (Intel included): payloadv2 is the complete system",
+    "url": "https://updates.cdn-apple.com/2025FallFCS/patches/093-37215/B51B59D1-C95A-45BD-B7E8-CF573092EA76/com_apple_MobileAsset_MacSoftwareUpdate/ab95b282cc354f9469d0d19c06f0f75d893ca135.zip",
+    "sha1": "ab95b282cc354f9469d0d19c06f0f75d893ca135"
+  },
+  "25A353-intel": {
+    "comment": "macOS 26.0 (25A353) OTA for Intel Macs from 13.7.x (22H713): BootKernelExtensions.kc, trust caches, x86_64SURamDisk.dmg",
+    "url": "https://updates.cdn-apple.com/2025FallFCS/patches/093-37064/1864BDE3-CE31-476D-9A53-85FC328EBEB1/com_apple_MobileAsset_MacSoftwareUpdate/c3b9b4ecf6e77192985aa7ce2cd39ea241745a49.zip",
+    "sha1": "c3b9b4ecf6e77192985aa7ce2cd39ea241745a49"
+  }
+}

@@ -1,0 +1,61 @@
+From 8cc60d644f2af82557953a200fc91e045024fa96 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 02:22:43 +0800
+Subject: [PATCH 2/3] build: upstream LLVM has no __builtin_xnu_type_* builtins
+
+---
+ iokit/IOKit/IOLib.h | 4 ++--
+ osfmk/kern/kalloc.h | 8 ++++----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/iokit/IOKit/IOLib.h b/iokit/IOKit/IOLib.h
+index c8e3fef..e5f3042 100644
+--- a/iokit/IOKit/IOLib.h
++++ b/iokit/IOKit/IOLib.h
+@@ -89,8 +89,8 @@ IOMallocArraySize(vm_size_t hdr_size, vm_size_t elem_size, vm_size_t elem_count)
+ }
+ 
+ #define IOKIT_TYPE_IS_COMPATIBLE_PTR(ptr, type) \
+-	(__builtin_xnu_types_compatible(os_get_pointee_type(ptr), type) ||   \
+-	    __builtin_xnu_types_compatible(os_get_pointee_type(ptr), void))  \
++	(1 ||                                                               \
++	    1)  /* no Apple type-compatibility builtin on upstream LLVM */
+ 
+ #define IOKIT_TYPE_ASSERT_COMPATIBLE_POINTER(ptr, type) \
+ 	_Static_assert(IOKIT_TYPE_IS_COMPATIBLE_PTR(ptr, type), \
+diff --git a/osfmk/kern/kalloc.h b/osfmk/kern/kalloc.h
+index 065b79d..87e7451 100644
+--- a/osfmk/kern/kalloc.h
++++ b/osfmk/kern/kalloc.h
+@@ -798,7 +798,7 @@ __options_decl(kt_granule_t, uint32_t, {
+  * @param type          The type to analyze
+  */
+ #define KT_SUMMARY_GRANULES(type) \
+-	(__builtin_xnu_type_summary(type) & KT_SUMMARY_MASK_TYPE_BITS)
++	((void)sizeof(type), KT_SUMMARY_MASK_DATA & KT_SUMMARY_MASK_TYPE_BITS) /* no Apple type summary on upstream LLVM */
+ 
+ /*!
+  * @macro KALLOC_TYPE_SIG_CHECK
+@@ -860,8 +860,8 @@ __options_decl(kt_granule_t, uint32_t, {
+  * @param type          the type which the pointer will be checked against.
+  */
+ #define KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type)                         \
+-	(__builtin_xnu_types_compatible(os_get_pointee_type(ptr), type) ||   \
+-	    __builtin_xnu_types_compatible(os_get_pointee_type(ptr), void))  \
++	(1 ||                                                               \
++	    1)  /* no Apple type-compatibility builtin on upstream LLVM */
+ 
+ #define KALLOC_TYPE_ASSERT_COMPATIBLE_POINTER(ptr, type) \
+ 	_Static_assert(KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type), \
+@@ -1579,7 +1579,7 @@ kt_size(vm_size_t s1, vm_size_t s2, vm_size_t c2)
+ #define KALLOC_TYPE_EMIT_SIG(sig_type, ...)                              \
+ 	(KALLOC_TYPE_CHECK(KT_SUMMARY_MASK_DATA, sig_type, ##__VA_ARGS__) || \
+ 	KALLOC_TYPE_VM_SIZE_CHECK(sig_type, ##__VA_ARGS__))?                 \
+-	"" : __builtin_xnu_type_signature(sig_type)
++	"" : "" /* no Apple type signature on upstream LLVM */
+ 
+ /*
+  * Kalloc type flags are adjusted to indicate if the type is "data-only" or
+-- 
+2.43.0
+

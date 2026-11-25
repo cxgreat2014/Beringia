@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: SPDX headers
+        run: scripts/check-spdx.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck -S error scripts/*.sh scripts/*/*.sh
+      - name: python syntax
+        run: python3 -m py_compile scripts/*/*.py tools/*/*.py
+
+  xnu-patches:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: series applies to xnu-12377.1.9
+        run: |
+          git clone -q --depth 1 --branch xnu-12377.1.9 https://github.com/apple-oss-distributions/xnu.git /tmp/xnu
+          grep -v '^#' xnu/series | while read -r p; do [ -n "$p" ] && git -C /tmp/xnu apply --check "$PWD/xnu/patches/$p" && echo "ok $p"; done
+
+  modules:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: kernel headers
+        run: sudo apt-get install -y linux-headers-$(uname -r)
+      - name: build host modules
+        run: |
+          if [ -f host/Makefile ]; then make -C host KDIR=/lib/modules/$(uname -r)/build; fi
+          if [ -f loader/Makefile ]; then make -C loader KDIR=/lib/modules/$(uname -r)/build; fi

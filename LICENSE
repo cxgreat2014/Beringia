@@ -1,0 +1,11 @@
+Beringia is made of parts under different licenses, kept apart along the line between the Linux kernel and XNU.
+Each source file names its license in an SPDX-License-Identifier line; the full texts are in LICENSES/:
+
+  GPL-2.0-only   host/, scripts/, tools/, tests/, docs/
+  APSL-2.0       loader/, xnu/patches/, kexts/
+  MIT            host/include/beringia/host.h and xnu/include/beringia/*.h (interfaces shared by both sides)
+
+Files without a comment syntax (patches, JSON, property lists) are under the license of the directory they are in.
+Patches to XNU are modifications of Apple's APSL-2.0 code and are distributed under APSL-2.0.
+
+Copyright (c) 2026 Beringia contributors.

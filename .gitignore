@@ -1,0 +1,27 @@
+# machine-local configuration
+/local.env
+
+# kernel module build output
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+*.symvers
+*.order
+.tmp_versions/
+*.a
+
+# Python
+__pycache__/
+*.pyc
+
+# never commit Apple binaries or disk images
+*.kc
+*.dmg
+*.ipsw
+*.img
+*.aar
+*.macho
+payload.[0-9][0-9][0-9]

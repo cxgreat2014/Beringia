@@ -1,0 +1,4 @@
+# Applied in order onto apple-oss-distributions/xnu tag xnu-12377.1.9 (scripts/xnu/prepare.sh).
+build/0001-linux-host-build-support.patch
+build/0002-upstream-llvm-compat.patch
+build/0003-private-header-stand-ins.patch

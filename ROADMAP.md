@@ -1,0 +1,38 @@
+# Roadmap
+
+Beringia is built in public. Each milestone has an **exit criterion that can be checked** (a log line, a test, a
+screenshot), and nothing is marked done without it. Status legend: ✅ done · 🔨 in progress · ⏳ next · ⬜ not started.
+
+| | Milestone | Exit criterion | Status |
+|---|---|---|---|
+| M0 | Reproducible XNU build on Linux | `scripts/xnu/build.sh` produces `kernel.development` (x86_64, `xnu-12377.1.9`) from a pristine tag + `xnu/series` | ✅ |
+| M1 | Host foundation | Carve-outs claimed; world-switch self-test: enter a test world (own CR3/GDT/IDT/TSS), take and forward a Linux timer interrupt, return, 10⁶ round trips without a Linux warning | ⏳ |
+| M2 | XNU early boot | `vstart` → `i386_init` → `kernel_bootstrap_thread`; XNU's console and panics reach the host log | ⬜ |
+| M3 | Time, idle, CPUs | Scheduler runs with a host timer; idle sleeps in Linux; 1 then N hosted CPUs with IPIs; no RCU stall / soft lockup over 10 min | ⬜ |
+| M4 | Platform & kernel collection | `BeringiaPlatform`/`BeringiaCPU` kexts; KC built on Linux from Beringia's kernel + 25A353 Apple kexts; IOKit reaches "waiting for root device" | ⬜ |
+| M5 | First macOS 26 userspace | `BeringiaDisk` + 25A353 recovery ramdisk as root; `launchd` (PID 1) starts and runs a shell | ⬜ |
+| M6 | Full macOS 26 system | System volume built from the 25A353 OTA payload; multi-user boot; console login; network (`BeringiaNet`), `ssh` into macOS | ⬜ |
+| M7 | Display & input | Framebuffer + input kexts; WindowServer and loginwindow on the CPU renderer; screenshot from the host | ⬜ |
+| M8 | Productization | One `beringia` CLI (build, disk, boot, console); CI for modules + XNU; test suite; docs for non-WSL hosts | ⬜ |
+
+## Now
+
+- M0 is done: a clean `xnu-12377.1.9` plus three build patches (`xnu/patches/build/`) links a 23.6 MB
+  `kernel.development` on WSL2.
+- M1 is next: `host/` world switch and interrupt forwarding, tested without XNU.
+
+## Known open questions
+
+Tracked as issues once the repository is public; listed here so they are not forgotten.
+
+- **kalloc_type on upstream LLVM.** Apple's `__builtin_xnu_type_summary` does not exist in upstream LLVM; the build
+  patch currently classifies every type as data. That changes zone segregation and may matter for zone-check panics.
+  A faithful replacement (a clang plugin or a pass computing the summary) may be needed.
+- **iig output.** DriverKit interface code is pre-generated for a later XNU and adapted by `tools/build/iig_fixup.py`.
+- **Hyper-V specifics.** TSC frequency, x2APIC, synthetic timers and MSRs that Hyper-V refuses (#GP) on paths XNU
+  takes at boot (power management, MCA, microcode).
+- **Code signing.** The kernel is not Apple's; AMFI policy for 25A353 userspace (trust caches, `amfi_get_out_of_my_way`)
+  needs a decision for M5.
+- **Kernel collection on Linux.** Building an x86_64 `MH_FILESET` boot KC without `kmutil`.
+
+The previous, abandoned approach and why: [docs/audit/2026-11-prior-x86-attempt.md](docs/audit/2026-11-prior-x86-attempt.md).

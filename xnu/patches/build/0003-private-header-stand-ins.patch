@@ -1,0 +1,72 @@
+From 007322c4d83af504543abd463737c9737da4261c Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 02:22:43 +0800
+Subject: [PATCH 3/3] build: stand-ins for private headers and symbols the
+ public tree lacks
+
+---
+ EXTERNAL_HEADERS/AppleFeatures.h              |  5 +++++
+ EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h | 12 ++++++++++++
+ osfmk/conf/files                              |  1 +
+ osfmk/kern/link_compat.c                      |  9 +++++++++
+ 4 files changed, 27 insertions(+)
+ create mode 100644 EXTERNAL_HEADERS/AppleFeatures.h
+ create mode 100644 EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h
+ create mode 100644 osfmk/kern/link_compat.c
+
+diff --git a/EXTERNAL_HEADERS/AppleFeatures.h b/EXTERNAL_HEADERS/AppleFeatures.h
+new file mode 100644
+index 0000000..a2de517
+--- /dev/null
++++ b/EXTERNAL_HEADERS/AppleFeatures.h
+@@ -0,0 +1,5 @@
++#ifndef XNU_LINUX64_APPLE_FEATURES_H
++#define XNU_LINUX64_APPLE_FEATURES_H
++/* The 25A353 KDK does not ship Apple's generated feature header. No optional Apple feature macro is used by the
++ * x86_64 vm_resident.c path; leave feature tests undefined so their normal #if/#ifdef fallbacks apply. */
++#endif
+diff --git a/EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h b/EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h
+new file mode 100644
+index 0000000..dd14b66
+--- /dev/null
++++ b/EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h
+@@ -0,0 +1,12 @@
++#ifndef CoreEntitlements_V2_Kernel_h
++#define CoreEntitlements_V2_Kernel_h
++
++/*
++ * LINUX64 build compatibility for the 25A353 KDK, which omits this private header.
++ * xnu-12377.1.9 only passes CEKernelAPI_t pointers through amfi_core_entitlements_register(); it never dereferences
++ * the interface. Keep the type opaque rather than importing the incompatible layout from a later CoreEntitlements.
++ * AMFI and other kexts that call interface methods must still use the full private header from their own build SDK.
++ */
++typedef struct _CEKernelAPI CEKernelAPI_t;
++
++#endif /* CoreEntitlements_V2_Kernel_h */
+diff --git a/osfmk/conf/files b/osfmk/conf/files
+index eb2fbad..5e868e3 100644
+--- a/osfmk/conf/files
++++ b/osfmk/conf/files
+@@ -400,3 +400,4 @@ osfmk/corecrypto/ccsha256_ltc_di.c	standard
+ 
+ osfmk/prng/prng_random.c	standard
+ osfmk/prng/entropy.c   standard
++osfmk/kern/link_compat.c	standard
+diff --git a/osfmk/kern/link_compat.c b/osfmk/kern/link_compat.c
+new file mode 100644
+index 0000000..33e8d4d
+--- /dev/null
++++ b/osfmk/kern/link_compat.c
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: APSL-2.0
++/* Symbols Apple's internal build provides but the open-source xnu-11417 tree does not. */
++/* The kernel's C++ static destructors never run. */
++int
++__cxa_atexit(void (*func)(void *), void *arg, void *dso)
++{
++	(void)func; (void)arg; (void)dso;
++	return 0;
++}
+-- 
+2.43.0
+

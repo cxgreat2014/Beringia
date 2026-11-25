@@ -1,0 +1,26 @@
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+trim_trailing_whitespace = true
+
+[*.{c,h,S,cpp}]
+indent_style = tab
+indent_size = 8
+
+[*.{sh,py}]
+indent_size = 4
+
+[*.sh]
+indent_style = tab
+
+[*.py]
+indent_style = space
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.patch]
+trim_trailing_whitespace = false
