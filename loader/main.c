@@ -6,6 +6,8 @@
  * Parameters:
  *   kernel=PATH       the kernel Mach-O (default /lib/firmware/beringia/kernel)
  *   boot_args=STRING  XNU's boot arguments
+ *   ramdisk=PATH      an image copied into XNU's RAM for memdev
+ *   disk=PATH         a host-file-backed block device for BeringiaDisk (unit 0)
  *   linux_cpu=N       the Linux CPU that runs hosted CPU 0 (default 1)
  *
  * This module uses Linux only through beringia_host.ko's interface (host.h) and the module ABI.
@@ -20,6 +22,9 @@ module_param(kernel, charp, 0444);
 static char *ramdisk = "";
 module_param(ramdisk, charp, 0444);
 MODULE_PARM_DESC(ramdisk, "a memory-disk image (HFS+ root filesystem) for memdev pmd0 + rd=md0");
+static char *disk = "";
+module_param(disk, charp, 0444);
+MODULE_PARM_DESC(disk, "a raw disk image for BeringiaDisk, 512-byte sectors, host block unit 0");
 static char *boot_args = "-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1";
 module_param(boot_args, charp, 0444);
 static int linux_cpu = 1;
@@ -92,6 +97,47 @@ static int read_kernel(u8 **image, u64 *size)
 	return 0;
 }
 
+/* Keep unit 0 open for the whole run. Prefer read/write, but a read-only image is useful for recovery boots and is
+ * accurately reported through BERINGIA_CALL_BLOCK_INFO. */
+static int open_disk(void)
+{
+	u64 size = 0;
+	void *f;
+
+	if (!disk[0])
+		return 0;
+	f = bh_file_open(disk, 1, &size);
+	if (f) {
+		ldr.disk_read_only = 0;
+	} else {
+		f = bh_file_open(disk, 0, &size);
+		ldr.disk_read_only = 1;
+	}
+	if (!f) {
+		bh_logf("xnu: cannot open disk %s", disk);
+		return -ENOENT;
+	}
+	if (!size || (size & (BERINGIA_BLOCK_SIZE - 1))) {
+		bh_logf("xnu: disk %s size %#llx is not a nonzero multiple of %u", disk, size,
+		    BERINGIA_BLOCK_SIZE);
+		bh_file_close(f);
+		return -EINVAL;
+	}
+	ldr.disk_file = f;
+	ldr.disk_size = size;
+	bh_logf("xnu: disk %s, %#llx bytes, %s (block unit 0)", disk, size,
+	    ldr.disk_read_only ? "read-only" : "writable");
+	return 0;
+}
+
+static void close_disk(void)
+{
+	if (ldr.disk_file) {
+		bh_file_close(ldr.disk_file);
+		ldr.disk_file = NULL;
+	}
+}
+
 static int __init ldr_init(void)
 {
 	struct bh_world_start st;
@@ -115,6 +161,9 @@ static int __init ldr_init(void)
 	err = ldr_boot_build(boot_args);
 	if (err)
 		return err;
+	err = open_disk();
+	if (err)
+		return err;
 
 	/* CPU 0 enters vstart(boot_args) as pstart would: on low_eintstack, interrupts off */
 	st.cr3 = ldr.pml4_pa;
@@ -123,12 +172,16 @@ static int __init ldr_init(void)
 	st.rdi = ldr.boot_args_pa;
 	st.rsi = 0;
 	bh_logf("xnu: entering vstart at %#llx (stack %#llx, CR3 %#llx)", st.rip, st.rsp, st.cr3);
-	return bh_cpu_start(0, linux_cpu, &st, ldr_hostcall);
+	err = bh_cpu_start(0, linux_cpu, &st, ldr_hostcall);
+	if (err)
+		close_disk();
+	return err;
 }
 
 static void __exit ldr_exit(void)
 {
 	bh_cpu_stop_all();
+	close_disk();
 	bh_log("xnu: unloaded");
 }
 

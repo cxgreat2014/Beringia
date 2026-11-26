@@ -291,6 +291,16 @@ int ldr_boot_build(const char *cmdline)
 	ba->Version = kBootArgsVersion2;
 	ba->efiMode = kBootArgsEfiMode64;
 	strscpy(ba->CommandLine, cmdline, sizeof(ba->CommandLine));
+	/* BeringiaDisk uses the exported PE_parse_boot_argn KPI instead of importing the kernel's non-KPI beringia_call.
+	 * This is exactly the entry address fill_shared writes to beringia_hook, in the host-module mapping shared with XNU. */
+	{
+		size_t used = strlen(ba->CommandLine);
+		int added = snprintf(ba->CommandLine + used, sizeof(ba->CommandLine) - used,
+		    " %s=%#llx", BERINGIA_HOSTCALL_BOOT_ARG, (unsigned long long)bh_hostcall_entry());
+
+		if (added < 0 || (size_t)added >= sizeof(ba->CommandLine) - used)
+			return -E2BIG;
+	}
 	if (ldr.ramdisk_size)
 		scnprintf(ba->CommandLine + strlen(ba->CommandLine),
 		    sizeof(ba->CommandLine) - strlen(ba->CommandLine),

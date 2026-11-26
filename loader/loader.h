@@ -18,6 +18,9 @@ struct ldr {
 	u64 boot_args_pa, memmap_pa, dt_pa, dt_len, pml4_pa, physfree;
 	const char *ramdisk_path;       /* a memory-disk image to boot from (memdev pmd0), or NULL */
 	u64 ramdisk_pa, ramdisk_size;   /* where ldr_boot_build placed it (reserved in the memory map) */
+	void *disk_file;                /* disk=PATH, host block unit 0; held open until all hosted CPUs stop */
+	u64 disk_size;                  /* bytes, a nonzero multiple of BERINGIA_BLOCK_SIZE */
+	int disk_read_only;             /* disk= was opened read-only */
 	u64 sym_vstart, sym_stack, sym_hook, sym_shared;     /* slid virtual addresses */
 	struct beringia_shared *shared; /* host address of XNU's beringia_shared */
 	unsigned int ncpus;

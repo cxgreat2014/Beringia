@@ -35,6 +35,11 @@ if [ -n "${BERINGIA_RAMDISK:-}" ]; then
 	install -m 0644 "$BERINGIA_RAMDISK" /lib/firmware/beringia/ramdisk
 	ramdisk_param="ramdisk=/lib/firmware/beringia/ramdisk"
 fi
+disk_param=
+if [ -n "${BERINGIA_DISK:-}" ]; then
+	[ -f "$BERINGIA_DISK" ] || die "no disk image at $BERINGIA_DISK"
+	disk_param="disk=$BERINGIA_DISK"
+fi
 
 # The per-run directory on the Windows side: never reused, so one run's evidence is not overwritten by the next.
 run_id=$(date +%Y%m%d-%H%M%S)
@@ -56,6 +61,7 @@ if [ -n "${BERINGIA_WIN_DIR:-}" ]; then
 		echo "carve=$BERINGIA_CARVE"
 		echo "boot_args=${BERINGIA_BOOT_ARGS:-<loader default>}"
 		echo "ramdisk=${BERINGIA_RAMDISK:-<none>}"
+		echo "disk=${BERINGIA_DISK:-<none>}"
 		echo "linux_cpu=${BERINGIA_LINUX_CPU:-1}"
 	} > "$run_dir/meta.txt"
 else
@@ -91,7 +97,7 @@ fi
 
 insmod "$BERINGIA_ROOT/host/beringia_host.ko" carve="$BERINGIA_CARVE" ${BERINGIA_TRACE:+trace="$BERINGIA_TRACE"}
 # Module parameters are split at spaces unless the value is in double quotes, which must reach the kernel literally.
-insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" ${ramdisk_param:+"$ramdisk_param"} \
+insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" ${ramdisk_param:+"$ramdisk_param"} ${disk_param:+"$disk_param"} \
 	${BERINGIA_BOOT_ARGS:+"boot_args=\"$BERINGIA_BOOT_ARGS\""}
 sleep "$secs"
 dmesg | grep -E "beringia|BUG:|Oops:|RIP:|WARNING:|rcu:|watchdog:" | tail -200

@@ -6,11 +6,125 @@
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
+#include <linux/interrupt.h>
+#include <linux/mutex.h>
+#include <linux/preempt.h>
 #include "loader.h"
 
 #define BH_HC_TRAP 0xfff0	/* the host's initial IDT: an exception before XNU's own IDT was loaded */
 
 static unsigned long fwd_count, tmr_count;
+static DEFINE_MUTEX(block_io_lock);
+
+/* Host calls enter with preemption and interrupts off. Positional file I/O may sleep, so run just that section as
+ * ordinary Linux kernel-thread context and restore the world-switch invariant before returning. */
+static void block_io_enter(void)
+{
+	preempt_enable();
+	local_irq_enable();
+	mutex_lock(&block_io_lock);
+}
+
+static void block_io_leave(void)
+{
+	mutex_unlock(&block_io_lock);
+	local_irq_disable();
+	preempt_disable();
+}
+
+static long ldr_block_info(unsigned long a1)
+{
+	struct beringia_block_info *info = bh_phys(a1, sizeof(*info));
+	unsigned int unit;
+
+	if (!info)
+		return -EFAULT;
+	unit = info->unit;
+	memset(info, 0, sizeof(*info));
+	info->unit = unit;
+	info->block_size = BERINGIA_BLOCK_SIZE;
+	if (unit == 0 && ldr.disk_file) {
+		info->size = ldr.disk_size;
+		info->read_only = ldr.disk_read_only;
+	}
+	return 0;
+}
+
+static long ldr_block_rw(unsigned long a1)
+{
+	struct beringia_block_req *req = bh_phys(a1, sizeof(*req));
+	void *segment[BERINGIA_BLOCK_MAX_SEGS];
+	u64 total = 0, done = 0;
+	unsigned int i;
+	long error = 0;
+
+	if (!req)
+		return -EFAULT;
+	req->result = -EINVAL;
+	if (req->unit != 0 || !ldr.disk_file) {
+		req->result = -ENODEV;
+		return 0;
+	}
+	if (req->write == BERINGIA_BLOCK_FLUSH) {
+		if (req->nseg != 0)
+			return 0;
+		/* All file writes are synchronous and this lock orders the flush after any concurrent write. There is no
+		 * bh_file_sync helper yet, so this is not an fsync of the host's stable storage. */
+		block_io_enter();
+		block_io_leave();
+		req->result = 0;
+		return 0;
+	}
+	if (req->write != BERINGIA_BLOCK_READ && req->write != BERINGIA_BLOCK_WRITE)
+		return 0;
+	if (req->nseg > BERINGIA_BLOCK_MAX_SEGS)
+		return 0;
+	if (req->write == BERINGIA_BLOCK_WRITE && ldr.disk_read_only) {
+		req->result = -EROFS;
+		return 0;
+	}
+	if (req->offset > ldr.disk_size)
+		return 0;
+
+	/* Validate the entire request before a write can have a partial side effect. */
+	for (i = 0; i < req->nseg; i++) {
+		u64 len = req->seg[i].len;
+
+		segment[i] = NULL;
+		if (!len)
+			continue;
+		if (total > ldr.disk_size - req->offset ||
+		    len > ldr.disk_size - req->offset - total ||
+		    req->seg[i].pa + len < req->seg[i].pa)
+			return 0;
+		segment[i] = bh_phys(req->seg[i].pa, len);
+		if (!segment[i]) {
+			req->result = -EFAULT;
+			return 0;
+		}
+		total += len;
+	}
+
+	block_io_enter();
+	for (i = 0; i < req->nseg && !error; i++) {
+		u64 len = req->seg[i].len, at = 0;
+
+		while (at < len) {
+			long n = bh_file_rw(ldr.disk_file, req->write,
+			    (u8 *)segment[i] + at, len - at, req->offset + done);
+
+			if (n <= 0 || (u64)n > len - at) {
+				error = n < 0 ? n : -EIO;
+				break;
+			}
+			at += n;
+			done += n;
+		}
+	}
+	block_io_leave();
+	req->result = error ? error : (long long)done;
+	return 0;
+}
 
 static void ldr_timer_fire(int cpu)
 {
@@ -107,6 +221,10 @@ long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 		bh_random(p, a2);
 		return 0;
 	}
+	case BERINGIA_CALL_BLOCK_INFO:
+		return ldr_block_info(a1);
+	case BERINGIA_CALL_BLOCK_RW:
+		return ldr_block_rw(a1);
 	case BH_HC_TRAP:
 		bh_logf("xnu: exception %lu at %#lx before XNU had its own IDT", a1, a2);
 		return BH_ABORT;

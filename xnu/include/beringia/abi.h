@@ -20,9 +20,14 @@
 #ifndef BERINGIA_ABI_H
 #define BERINGIA_ABI_H
 
-#define BERINGIA_ABI_VERSION    1
+#define BERINGIA_ABI_VERSION    1       /* block calls 34/35 are part of version 1 */
 #define BERINGIA_KERNEL_BASE    0xffffff8000000000ULL   /* x86_64 XNU KERNEL_BASE: image PA = VA - this */
 #define BERINGIA_MAX_CPUS       64
+
+/* Standalone kexts cannot import the kernel's non-KPI beringia_call symbol. The loader therefore publishes the same
+ * entry address it writes to beringia_hook as this numeric boot argument; a hosted kext may use the calling convention
+ * above. It is a kernel virtual address in the shared host-module mapping, not a physical address. */
+#define BERINGIA_HOSTCALL_BOOT_ARG  "beringia_hc"
 
 enum beringia_call {
 	/* console and diagnostics */
@@ -42,8 +47,8 @@ enum beringia_call {
 	/* services */
 	BERINGIA_CALL_WALLCLOCK     = 32,   /* a1 = PA of u64[2] {seconds, nanoseconds} UTC */
 	BERINGIA_CALL_RANDOM        = 33,   /* a1 = PA, a2 = length (<= 4096, within one page): host CSPRNG bytes */
-	BERINGIA_CALL_BLOCK_RW      = 34,   /* a1 = PA of struct beringia_block_req */
-	BERINGIA_CALL_BLOCK_INFO    = 35,   /* a1 = PA of struct beringia_block_info */
+	BERINGIA_CALL_BLOCK_RW      = 34,   /* a1 = PA of struct beringia_block_req, a2 = 0; result is in the request */
+	BERINGIA_CALL_BLOCK_INFO    = 35,   /* a1 = PA of struct beringia_block_info, a2 = 0; host fills the structure */
 };
 
 /* Bits of the per-CPU pending word (set by the host or another CPU, taken by XNU in its interrupt context). */
@@ -82,7 +87,16 @@ struct beringia_cpu_start {
 	unsigned long long cr3;             /* XNU's kernel CR3 */
 };
 
-/* BERINGIA_CALL_BLOCK_RW: one request on the host disk unit, data in physically contiguous segments. */
+/* BERINGIA_CALL_BLOCK_RW: one request on host disk unit 0 (loader disk=PATH), data in physically contiguous segments.
+ * The host validates every segment with bh_phys before starting an operation. For read/write, offset is the file byte
+ * offset and segments are contiguous in device order. result is the total bytes moved, or a negative Linux errno.
+ * Flush currently completes outstanding host-file writes but does not promise an fsync to stable storage. */
+#define BERINGIA_BLOCK_SIZE       512
+#define BERINGIA_BLOCK_MAX_SEGS   16
+#define BERINGIA_BLOCK_READ       0
+#define BERINGIA_BLOCK_WRITE      1
+#define BERINGIA_BLOCK_FLUSH      2
+
 struct beringia_block_seg {
 	unsigned long long pa;
 	unsigned long long len;
@@ -90,12 +104,12 @@ struct beringia_block_seg {
 
 struct beringia_block_req {
 	unsigned int unit;
-	unsigned int write;                 /* 0 read, 1 write, 2 flush */
-	unsigned long long offset;          /* bytes */
-	unsigned int nseg;
+	unsigned int write;                 /* BERINGIA_BLOCK_READ, _WRITE or _FLUSH */
+	unsigned long long offset;          /* bytes; ignored for flush */
+	unsigned int nseg;                  /* 0..BERINGIA_BLOCK_MAX_SEGS; must be 0 for flush */
 	unsigned int pad;
-	long long result;                   /* bytes transferred or -errno */
-	struct beringia_block_seg seg[16];
+	long long result;                   /* bytes transferred or -errno; 0 for a successful flush */
+	struct beringia_block_seg seg[BERINGIA_BLOCK_MAX_SEGS];
 };
 
 struct beringia_block_info {

@@ -146,6 +146,14 @@ SYM_CODE_START_LOCAL(to_foreign)
 	popq	%r14
 	movq	BHW_TSTACK_TOP(%r15), %rsp
 	lidt	bh_tidt_linux_desc(%rip)
+	/*
+	 * CR4.UMIP must be clear in the foreign world on every entry: macOS reads the IDT in user mode
+	 * (libsystem's __os_cpu_number, via sidt/sgdt), which #GPs when Linux left UMIP set. On exit to
+	 * Linux the state safety net puts Linux's CR4 (with UMIP set) back.
+	 */
+	movq	%cr4, %rax
+	andq	$~0x800, %rax
+	movq	%rax, %cr4
 	movq	BHW_X_CR3(%r15), %rax
 	movq	%rax, %cr3
 	lgdt	BHW_X_GDTR(%r15)

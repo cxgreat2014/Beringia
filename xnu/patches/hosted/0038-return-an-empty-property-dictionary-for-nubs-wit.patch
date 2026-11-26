@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 01:25:14 +0800
+Subject: [PATCH] hosted: return an empty property dictionary for nubs with no
+ property table
+
+dictionaryWithProperties() called getPropertyTable()->getCapacity() and
+OSDictionary::withDictionary() unguarded. Some hosted nubs never get a
+property table, so io_service_get_matching_service (which walks every
+service for _copyPropertiesForMatching) faulted, in ramrod. Return an
+empty dictionary instead. With this and the world-switch UMIP clear, the
+recovery launchd runs the whole boot sequence and reboots deliberately.
+---
+ iokit/Kernel/IORegistryEntry.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/iokit/Kernel/IORegistryEntry.cpp b/iokit/Kernel/IORegistryEntry.cpp
+index ef6b6ed..5685e43 100644
+--- a/iokit/Kernel/IORegistryEntry.cpp
++++ b/iokit/Kernel/IORegistryEntry.cpp
+@@ -573,6 +573,12 @@ IORegistryEntry::dictionaryWithProperties( void ) const
+ {
+ 	OSDictionary *      dict;
+ 
++	/* BERINGIA: some hosted nubs never get a property table; matching must see an empty dictionary, not a
++	 * NULL dereference (io_service_get_matching_service walks every service). */
++	if (!getPropertyTable()) {
++		return OSDictionary::withCapacity(1);
++	}
++
+ 	PLOCK;
+ 	dict = OSDictionary::withDictionary( getPropertyTable(),
+ 	    getPropertyTable()->getCapacity());
