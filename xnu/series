@@ -38,3 +38,4 @@ hosted/0033-enable-memdev-pmd0-boot-arguments-for-a-ram-disk.patch
 hosted/0034-tolerate-missing-amfi-and-block-storage-classes-.patch
 hosted/0035-unblock-hw-osenvironment-when-there-is-no-nvram-.patch
 hosted/0036-log-fatal-userspace-exception-details-bring-up-a.patch
+hosted/0037-map-only-the-carve-outs-in-the-physmap-p2.patch

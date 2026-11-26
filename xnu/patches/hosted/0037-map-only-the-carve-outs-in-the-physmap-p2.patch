@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 00:33:02 +0800
+Subject: [PATCH] hosted: map only the carve-outs in the physmap (P2)
+
+The physmap used to map every physical page from 0 to phys_top writable,
+the host's own RAM included. A stray access could then corrupt the host
+(the WSL disk I/O errors seen during bring-up are a reminder of what is
+at stake). physmap_init_L2 now leaves a 2 MiB block unmapped unless it is
+inside a conventional EFI memory-map range, which on a hosted boot is
+exactly the carve-outs. Verified: the recovery ramdisk still boots to
+ignition-complete with no new faults.
+---
+ osfmk/i386/i386_init.c | 45 +++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 40 insertions(+), 5 deletions(-)
+
+diff --git a/osfmk/i386/i386_init.c b/osfmk/i386/i386_init.c
+index b67afef..0874070 100644
+--- a/osfmk/i386/i386_init.c
++++ b/osfmk/i386/i386_init.c
+@@ -67,6 +67,7 @@
+ #include <kern/assert.h>
+ #include <kern/debug.h>
+ #include <beringia_hosted.h>
++#include <pexpert/i386/efi.h>
+ #include <kern/misc_protos.h>
+ #include <kern/startup.h>
+ #include <kern/clock.h>
+@@ -232,6 +233,36 @@ x86_64_post_sleep(uint64_t new_cr3)
+ // NPHYSMAP is determined by the maximum supported RAM size plus 4GB to account
+ // the PCI hole (which is less 4GB but not more).
+ 
++/*
++ * BERINGIA: on a hosted kernel the physmap must cover ONLY the RAM the host lends us (the EFI map's conventional
++ * ranges, which are exactly the carve-outs), never the host's own memory. Return whether a 2 MiB block is inside
++ * one of those ranges; other blocks are left unmapped, so a stray access faults instead of corrupting the host.
++ */
++static bool
++beringia_physmap_wanted(uint64_t pa, uint64_t len)
++{
++	EFI_MEMORY_DESCRIPTOR *m = (EFI_MEMORY_DESCRIPTOR *) kernelBootArgs->MemoryMap;
++	uint64_t bytes = kernelBootArgs->MemoryMapSize, stride = kernelBootArgs->MemoryMapDescriptorSize, off;
++
++	if (!m || !stride) {
++		return true;	/* no map: do not change anything */
++	}
++	for (off = 0; off + stride <= bytes; off += stride) {
++		EFI_MEMORY_DESCRIPTOR *e = (EFI_MEMORY_DESCRIPTOR *) ((uint8_t *) m + off);
++		uint64_t start, end;
++
++		if (e->Type != kEfiConventionalMemory) {
++			continue;
++		}
++		start = e->PhysicalStart;
++		end = start + (e->NumberOfPages << 12);
++		if (pa < end && pa + len > start) {
++			return true;
++		}
++	}
++	return false;
++}
++
+ static int
+ physmap_init_L2(uint64_t *physStart, pt_entry_t **l2ptep)
+ {
+@@ -245,11 +276,15 @@ physmap_init_L2(uint64_t *physStart, pt_entry_t **l2ptep)
+ 	}
+ 
+ 	for (i = 0; i < NPDPG; i++) {
+-		physmapL2[i] = *physStart
+-		    | INTEL_PTE_PS
+-		    | INTEL_PTE_VALID
+-		    | INTEL_PTE_NX
+-		    | INTEL_PTE_WRITE;
++		if (beringia_hosted() && !beringia_physmap_wanted(*physStart, NBPD)) {
++			physmapL2[i] = 0;	/* the host's own RAM stays unmapped (P2) */
++		} else {
++			physmapL2[i] = *physStart
++			    | INTEL_PTE_PS
++			    | INTEL_PTE_VALID
++			    | INTEL_PTE_NX
++			    | INTEL_PTE_WRITE;
++		}
+ 
+ 		*physStart += NBPD;
+ 	}
