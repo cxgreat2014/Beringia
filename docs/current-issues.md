@@ -5,24 +5,22 @@ An honest account of where Beringia stands, what is broken, and what is next. Ev
 directory (`$BERINGIA_WIN_DIR/runs/<id>/`, see [debugging.md](debugging.md)) that shows it. For the architecture, see
 [architecture.md](architecture.md); for milestones, [../ROADMAP.md](../ROADMAP.md).
 
-## Where XNU gets to today (2026-11-26, runs 20261126-214058 and 20261126-214814)
+## Where XNU gets to today (2026-11-26, runs 20261126-224146 and 20261126-224344)
 
-With a prelinked kernel holding Apple's `corecrypto` and `pthread` (25A353 KDK; `scripts/kc/build.sh corecrypto
-pthread`, see [research/m4-spike.md](research/m4-spike.md)), XNU boots on one hosted CPU through `vstart`,
-`i386_init`, VM, zones, the scheduler, `PE_init_iokit` (BeringiaPlatform; the prelinked kexts are registered, copied
-into the kext map and started: corecrypto's FIPS self-test passes all 20 tests, pthread registers),
-`trust_cache_init` (still stubbed, see below), `machine_lockdown`, `bsd_init` (MAC, buffers, `mbinit`, the network
-stack's `domaininit`, `dlil_init`, `gif0`/`stf0`) and then waits, as it should without a disk:
+With a prelinked kernel holding the security stack (`scripts/kc/build.sh --closure ...`: pthread, corecrypto,
+CoreTrust, AppleImage4, AppleMobileFileIntegrity, Sandbox, Quarantine, AppleSystemPolicy, AppleKeyStore, AppleMatch
+and their dependencies, 28 kexts from the 25A353 KDK), XNU boots through:
 
-```
-Waiting on <dict ID="0"><key>IOProviderClass</key><string ID="1">IOMedia</string><key>Content</key>...Apple_HFS...
-Still waiting for root device
-```
+- `PE_init_iokit`: the prelinked kexts are registered and started; corecrypto's FIPS self-test passes (20/20);
+- **the security extensions all load**: AppleImage4 hooks, AMFI ("Booted in a VM", "developer mode is force
+  enabled"), Seatbelt sandbox, Quarantine, AppleSystemPolicy; AppleKeyStore and AppleCredentialManager start
+  (`_sep_enabled = 0`, so AMFI cannot get a local signing public key from AKS: expected without a SEP);
+- `trust_cache_init` succeeds (the img4 interface is present; no static trust caches are supplied yet);
+- `bsd_init` and the network stack, then "Still waiting for root device".
 
-It stays there with its timer running; across a 10-minute run Linux logged no warnings and the state safety net
-reported nothing. This is the M4 exit condition, reached before the security stack (M4-c) is in.
-
-The bare kernel (no kexts) still stops, as before, at `pthread kernel extension not loaded` in `bsd_init`.
+A 14-minute run in that state logged **no Linux warnings and no state-safety-net reports** (run 20261126-224344).
+That is the M4 exit condition with M4-c done. M4 needed one more hosted patch: AppleImage4's expert dump queries
+"non-executable privilege level" with a null property name (patch 0032 returns "no such property").
 
 ## Fixed today (and why the VM used to wedge)
 
@@ -51,8 +49,8 @@ The bare kernel (no kexts) still stops, as before, at `pthread kernel extension 
 
 | Area | State |
 |---|---|
-| kexts | A legacy prelinked kernel with corecrypto and pthread (`tools/kc`). The security stack (CoreTrust, AppleKeyStore, AppleImage4, AMFI, Sandbox, Quarantine, AppleSystemPolicy) is next (M4-c). BeringiaPlatform is still linked into the kernel. |
-| trust caches | Disabled while AMFI is absent (bring-up stub, patch 0029); to become lazy initialisation when AMFI registers (M4-c). |
+| kexts | A legacy prelinked kernel with the security stack (28 kexts; `tools/kc`, `scripts/kc/build.sh --closure`). BeringiaPlatform is still linked into the kernel. |
+| trust caches | `trust_cache_init` succeeds with the img4 interface; no static trust cache is supplied by the loader yet (needed for real signed userland). Patch 0029 remains as the no-image4 fallback. |
 | kalloc_type | Degraded to size-based data zones (upstream LLVM has no `__builtin_xnu_type_summary`). Kexts' own views are not parsed at startup in the static format and go through `kalloc_type_impl_external`'s fallback (as kexts outside the BootKC do on macOS): no hang, verified with corecrypto and pthread. |
 | LAPIC | A RAM page with no-op init; timer and IPIs go through the host. |
 | NMI / #MC | **Not forwarded yet**: in the foreign world they enter XNU's own handlers. |
@@ -63,8 +61,7 @@ The bare kernel (no kexts) still stops, as before, at `pthread kernel extension 
 
 ## Next steps, in order
 
-1. **M4-c, security stack**: CoreTrust and AppleKeyStore, then AppleImage4, AMFI, Sandbox, Quarantine and
-   AppleSystemPolicy together; turn the trust cache stub into lazy initialisation when AMFI registers.
-2. `tools/kc`: the dependency closure (load order from `OSBundleLibraries`), and tests in CI.
-3. NMI / #MC forwarding; host isolation tests (memcheck/fpcheck) after every boot.
-4. M5: a root device (BeringiaDisk or a RAM disk) and `launchd`.
+1. **M5, first userspace**: the loader boots a RAM-disk root (`ramdisk=` module parameter, memdev `pmd0=` + `rd=md0`,
+   patch 0033), with a static test init; then a real root volume and `launchd`.
+2. A host-backed block device (BeringiaDisk) and the APFS system volume for the real userland.
+3. `tools/kc` tests in CI; host isolation tests (memcheck/fpcheck) after boots; NMI / #MC forwarding.

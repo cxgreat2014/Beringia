@@ -33,3 +33,5 @@ hosted/0028-beringiaplatform-announces-the-cpus-the-rtc-and-.patch
 hosted/0029-run-without-trust-caches-until-amfi-is-loaded-br.patch
 hosted/0030-remove-the-timer-bring-up-instrumentation.patch
 hosted/0031-hash-kernel-addresses-without-corecrypto-until-i.patch
+hosted/0032-treat-a-null-registry-property-name-as-absent.patch
+hosted/0033-enable-memdev-pmd0-boot-arguments-for-a-ram-disk.patch

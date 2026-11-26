@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 22:58:35 +0800
+Subject: [PATCH] hosted: treat a null registry property name as absent
+
+AppleImage4's expert dump queries "non-executable privilege level" (its
+property type 0x20) with a null property name, which crashed in
+OSSymbol::withCString(NULL) -> strnlen. Return NULL instead: the kext
+handles a missing property. With this, AppleImage4, AMFI, Sandbox,
+Quarantine, AppleSystemPolicy and AppleKeyStore all start, and XNU
+reaches the root-device wait with the security stack loaded.
+---
+ iokit/Kernel/IORegistryEntry.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/iokit/Kernel/IORegistryEntry.cpp b/iokit/Kernel/IORegistryEntry.cpp
+index 9a6a6bb..ef6b6ed 100644
+--- a/iokit/Kernel/IORegistryEntry.cpp
++++ b/iokit/Kernel/IORegistryEntry.cpp
+@@ -840,6 +840,12 @@ IORegistryEntry::getProperty( const OSString * aKey) const
+ OSObject *
+ IORegistryEntry::getProperty( const char * aKey) const
+ {
++	/* BERINGIA: AppleImage4's expert dump queries "non-executable privilege level" (its property type 0x20)
++	 * with a null property name. Treat a null name as "no such property", which the kext handles, instead of
++	 * crashing in OSSymbol::withCString(NULL). */
++	if (!aKey) {
++		return NULL;
++	}
+ 	const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+ 	OSObject * obj = getProperty( tmpKey );
+ 

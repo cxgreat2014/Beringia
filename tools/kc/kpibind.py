@@ -90,7 +90,9 @@ def main():
 
     index = bundle_index(extensions)
     names, aliases, missing = set(), {}, []
-    for dep in info.get('OSBundleLibraries', {}):
+    # XNU (getPropertyForHostArch) prefers the architecture's own dependency list.
+    libs = info.get('OSBundleLibraries_x86_64') or info.get('OSBundleLibraries') or {}
+    for dep in libs:
         if dep not in index:
             missing.append(dep)
             continue

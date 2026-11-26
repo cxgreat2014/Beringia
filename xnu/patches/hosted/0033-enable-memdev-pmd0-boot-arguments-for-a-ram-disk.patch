@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 22:58:35 +0800
+Subject: [PATCH] hosted: enable memdev pmd0= boot arguments for a RAM-disk
+ root
+
+The loader can then place an HFS+ image in the carve-out, reserve it in
+the EFI memory map and boot it as md0 (rd=md0), which is the simplest
+first root filesystem: no disk driver needed.
+---
+ config/MASTER.x86_64 | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/config/MASTER.x86_64 b/config/MASTER.x86_64
+index ca0de16..a1da95f 100644
+--- a/config/MASTER.x86_64
++++ b/config/MASTER.x86_64
+@@ -88,6 +88,9 @@ options     CONFIG_MACF_LAZY_VNODE_LABELS   # Turn on labels, don't preallocate
+ 
+ options     NO_NESTED_PMAP                  # <no_nested_pmap>
+ 
++# BERINGIA: memdev pmd0=/vmd0= boot arguments, so the loader can boot a RAM-disk root filesystem.
++options     CONFIG_MEMDEV_INSECURE
++
+ options		HYPERVISOR				# Apple hypervisor kext support	# <hypervisor>
+ 
+ options     CONFIG_MACH_APPROXIMATE_TIME

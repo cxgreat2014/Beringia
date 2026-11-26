@@ -33,6 +33,9 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
   `legacy_init`). With that and the other hosted guards fixed, the bare kernel boots through IOKit, `trust_cache_init`
   (stubbed), `machine_lockdown` and into `bsd_init`, where it stops at "pthread kernel extension not loaded": the
   kernel collection (M4) is next. Details and run directories: [docs/current-issues.md](docs/current-issues.md).
+- 2026-11-26 (night): M4-c and the M4 exit. The security stack (28 kexts) loads: AppleImage4, AMFI, Sandbox,
+  Quarantine, AppleSystemPolicy, AppleKeyStore; `trust_cache_init` passes; 14 minutes at the root-device wait with
+  no Linux warnings. `tools/kc/deps.py` computes the kext closure (honouring `OSBundleLibraries_x86_64`).
 - 2026-11-26 (evening): M4 spike. Apple's kexts link on Linux with OpenCorePkg's OcAppleKernelLib into a legacy
   prelinked kernel; with corecrypto (FIPS self-test passes) and pthread, XNU boots to "Still waiting for root device"
   and idles there cleanly for 10 minutes. Same C++ ABI as Apple's kernel (all 348 vtables, slot by slot).
