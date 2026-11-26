@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
+# shellcheck shell=bash
 # Common environment for Beringia's scripts. Source it; do not run it.
 #
 # Everything Beringia downloads or builds lives under BERINGIA_WORK (default ~/beringia-work), never in the
