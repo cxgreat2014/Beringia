@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 21:49:14 +0800
+Subject: [PATCH] hosted: hash kernel addresses without corecrypto until it
+ registers
+
+Kexts from a legacy prelinked kernel are started before corecrypto
+registers its functions, and corecrypto is one of them: OSKext::start()
+-> validateKextMapping() -> mach_vm_region_recurse() hashes a VM object
+address with SHA-256 through g_crypto_funcs, which is still NULL. A
+fileset kernel collection never takes that path. Until corecrypto is
+registered, mix the address with the salt instead; nothing outside the
+kernel runs yet to see the result.
+---
+ osfmk/vm/vm_kern.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
+index 6289f17..df89c83 100644
+--- a/osfmk/vm/vm_kern.c
++++ b/osfmk/vm/vm_kern.c
+@@ -88,6 +88,7 @@
+ 
+ #include <libkern/OSDebug.h>
+ #include <libkern/crypto/sha2.h>
++#include <libkern/crypto/crypto_internal.h>
+ #include <libkern/section_keywords.h>
+ #include <sys/kdebug.h>
+ #include <sys/kdebug_triage.h>
+@@ -4649,6 +4650,20 @@ vm_kernel_addrhash_internal(vm_offset_t addr, uint64_t salt)
+ 
+ 	addr = VM_KERNEL_STRIP_PTR(addr);
+ 
++	/*
++	 * BERINGIA: kexts from a legacy prelinked kernel are started before corecrypto registers its functions (and
++	 * corecrypto itself is one of them): OSKext::start() -> validateKextMapping() -> mach_vm_region_recurse() hashes
++	 * an object address here. A fileset kernel collection never takes that path. Until corecrypto is there, mix the
++	 * address with the salt instead: nothing outside the kernel runs yet to see the result.
++	 */
++	if (g_crypto_funcs == NULL) {
++		addr ^= salt;
++		addr ^= addr >> 33;
++		addr *= 0xff51afd7ed558ccdULL;
++		addr ^= addr >> 33;
++		return addr;
++	}
++
+ 	vm_offset_t sha_digest[SHA256_DIGEST_LENGTH / sizeof(vm_offset_t)];
+ 	SHA256_CTX sha_ctx;
+ 
