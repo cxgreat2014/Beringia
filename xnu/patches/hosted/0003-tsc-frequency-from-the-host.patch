@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 03:06:18 +0800
-Subject: [PATCH 06/17] hosted: TSC frequency from the host
+Subject: [PATCH 06/22] hosted: TSC frequency from the host
 
 CPUID leaves 0x15/0x16 and the platform MSRs are not usable in a VM; when
 hosted, tsc_init takes the frequency the host measured, as the VMM path

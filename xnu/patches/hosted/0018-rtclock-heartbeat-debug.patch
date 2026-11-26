@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 12:01:33 +0800
+Subject: [PATCH 21/22] hosted: rtclock heartbeat (debug)
+
+---
+ osfmk/i386/rtclock.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/osfmk/i386/rtclock.c b/osfmk/i386/rtclock.c
+index ca03c7d..235db63 100644
+--- a/osfmk/i386/rtclock.c
++++ b/osfmk/i386/rtclock.c
+@@ -40,6 +40,7 @@
+  */
+ 
+ 
++#include <beringia_hosted.h>
+ #include <mach/mach_types.h>
+ 
+ #include <kern/cpu_data.h>
+@@ -423,6 +424,17 @@ rtclock_intr(
+ 	uint64_t        rip;
+ 	boolean_t       user_mode = FALSE;
+ 
++#if defined(__x86_64__)
++	/* BERINGIA debug: heartbeat so we can tell whether the host timer is being delivered. */
++	if (beringia_hosted()) {
++		static unsigned int hb;
++
++		if (++hb % 250 == 0) {
++			kprintf("BERINGIA: rtclock heartbeat %u\n", hb);
++		}
++	}
++#endif
++
+ 	assert(get_preemption_level() > 0);
+ 	assert(!ml_get_interrupts_enabled());
+ 

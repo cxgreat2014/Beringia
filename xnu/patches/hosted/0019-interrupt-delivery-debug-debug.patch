@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 12:01:33 +0800
+Subject: [PATCH 22/22] hosted: interrupt delivery debug (debug)
+
+---
+ osfmk/i386/trap.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index 3ce6f23..da705e0 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -853,9 +853,6 @@ kernel_trap(
+ 		if (handle_kernel_breakpoint(saved_state, &reason, &trapcomment)) {
+ 			goto common_return;
+ 		}
+-		if (beringia_hosted()) {
+-			kprintf("BERINGIA kernel #UD kern_ip=%p\n", (void *)kern_ip);
+-		}
+ 		fpUDflt(kern_ip);
+ 		goto debugger_entry;
+ 

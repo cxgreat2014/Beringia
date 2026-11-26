@@ -69,12 +69,31 @@ static void dt_u64(struct dt_builder *b, const char *name, u64 v)
 	dt_prop(b, name, &v, sizeof(v));
 }
 
+/* debug: recursively log a flattened DT node's name and its children */
+static u8 *dt_debug_walk(u8 *p, int depth)
+{
+	u32 np = *(u32 *)p, nc = *(u32 *)(p + 4), i, len;
+	u8 *q = p + 8;
+	char name[33] = {0};
+
+	for (i = 0; i < np; i++) {
+		len = *(u32 *)(q + 32);
+		if (i == 0)	/* the first property is "name"; its value is the node's name */
+			memcpy(name, q + 36, len < 32 ? len : 32);
+		q += 36 + ((len + 3) & ~3U);
+	}
+	bh_logf("xnu: DT %*s '%s' (%u children)", depth * 2, "", name, nc);
+	for (i = 0; i < nc; i++)
+		q = dt_debug_walk(q, depth + 1);
+	return q;
+}
+
 /* /, /chosen, /chosen/memory-map, /efi, /efi/platform */
 static u64 build_dt(u8 *base, u64 room)
 {
 	struct dt_builder b = { base, base, base + room };
 
-	dt_node(&b, 3, 2);
+	dt_node(&b, 3, 3);
 	dt_str(&b, "name", "device-tree");
 	dt_str(&b, "compatible", "Beringia1,1");
 	dt_str(&b, "model", "Beringia1,1");
@@ -86,8 +105,15 @@ static u64 build_dt(u8 *base, u64 room)
 		dt_str(&b, "name", "chosen");
 		dt_prop(&b, "random-seed", seed, sizeof(seed));
 		{
-			dt_node(&b, 1, 0);
+			u32 dtmap[2];
+
+			dt_node(&b, 2, 0);
 			dt_str(&b, "name", "memory-map");
+			/* IODeviceTreeAlloc needs /chosen/memory-map/DeviceTree (addr, size) to copy the DT's property tables
+			 * out of the boot data (otherwise they alias it and dangle once the memory is reused). */
+			dtmap[0] = (u32)ldr.dt_pa;
+			dtmap[1] = 16384;
+			dt_prop(&b, "DeviceTree", dtmap, sizeof(dtmap));
 		}
 	}
 	{
@@ -99,6 +125,12 @@ static u64 build_dt(u8 *base, u64 room)
 			dt_u64(&b, "FSBFrequency", bh_tsc_hz());
 			dt_u64(&b, "ARTFrequency", 0);
 		}
+	}
+	{
+		/* /options: IODTPlatformExpert::processTopLevel requires it (gIOOptionsEntry, the NVRAM node) */
+		dt_node(&b, 2, 0);
+		dt_str(&b, "name", "options");
+		dt_str(&b, "boot-args", "");
 	}
 	return b.p - b.base;
 }
@@ -214,6 +246,14 @@ int ldr_boot_build(const char *cmdline)
 	ba->MemoryMapDescriptorVersion = 1;
 	ba->deviceTreeP = ldr.dt_pa;
 	ba->deviceTreeLength = ldr.dt_len;
+	/* debug: walk the DT and log every node's name, to verify /options is present */
+	{
+		u8 *base = bh_phys(ldr.dt_pa, ldr.dt_len);
+
+		bh_logf("xnu: DT debug: dt_pa=%#llx dt_len=%llu base=%p", ldr.dt_pa, ldr.dt_len, base);
+		if (base)
+			dt_debug_walk(base, 0);
+	}
 	ba->kaddr = ldr.kaddr;
 	ba->ksize = ldr.physfree - ldr.kaddr;
 	ba->kslide = ldr.slide;

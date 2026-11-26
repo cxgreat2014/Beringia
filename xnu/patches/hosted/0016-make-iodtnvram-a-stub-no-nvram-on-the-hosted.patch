@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 12:01:33 +0800
+Subject: [PATCH 19/22] hosted: make IODTNVRAM a stub (no NVRAM on the hosted
+ platform)
+
+---
+ iokit/Kernel/IONVRAM.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/iokit/Kernel/IONVRAM.cpp b/iokit/Kernel/IONVRAM.cpp
+index ea6a958..b4db0d9 100644
+--- a/iokit/Kernel/IONVRAM.cpp
++++ b/iokit/Kernel/IONVRAM.cpp
+@@ -29,6 +29,7 @@
+ 
+ #define IOKIT_ENABLE_SHARED_PTR
+ 
++#include <beringia_hosted.h>
+ #include <AssertMacros.h>
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IONVRAM.h>
+@@ -1360,6 +1361,12 @@ IODTNVRAM::start(IOService *provider)
+ 
+ 	DEBUG_ALWAYS("...\n");
+ 
++	/* BERINGIA: there is no NVRAM on the hosted platform; keep IODTNVRAM as a stub (processTopLevel requires the
++	 * object to exist) without initializing a format handler, which would need /chosen/nvram-* properties. */
++	if (beringia_hosted()) {
++		return true;
++	}
++
+ 	require(super::start(provider), fail);
+ 
+ 	// Check if our overridden init function was called

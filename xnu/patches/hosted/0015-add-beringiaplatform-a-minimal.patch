@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 12:01:33 +0800
+Subject: [PATCH 18/22] hosted: add BeringiaPlatform, a minimal
+ IODTPlatformExpert for the boot DT
+
+---
+ iokit/Kernel/BeringiaPlatform.cpp | 63 +++++++++++++++++++++++++++++++
+ iokit/KernelConfigTables.cpp      |  7 ++++
+ iokit/conf/files                  |  1 +
+ 3 files changed, 71 insertions(+)
+ create mode 100644 iokit/Kernel/BeringiaPlatform.cpp
+
+diff --git a/iokit/Kernel/BeringiaPlatform.cpp b/iokit/Kernel/BeringiaPlatform.cpp
+new file mode 100644
+index 0000000..faff8f4
+--- /dev/null
++++ b/iokit/Kernel/BeringiaPlatform.cpp
+@@ -0,0 +1,63 @@
++/*
++ * Copyright (c) 2026 Beringia contributors. All rights reserved.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. The rights granted to you under the License
++ * may not be used to create, or enable the creation or redistribution of,
++ * unlawful or unlicensed copies of an Apple operating system, or to
++ * circumvent, violate, or enable the circumvention or violation of, any
++ * terms of an Apple operating system software license agreement.
++ *
++ * Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
++ */
++/*
++ * BERINGIA: the platform expert for a hosted x86_64 XNU.
++ *
++ * The hosted machine has no ACPI, PCI, HPET, IOAPIC or SMC (those belong to the Linux host), so AppleACPIPlatform and
++ * friends cannot drive it. BeringiaPlatform is the minimal IODTPlatformExpert that matches the boot device tree the
++ * loader provides (see loader/boot.c) and lets IOKit proceed: the base class sets gIOPlatform, processes the DT and
++ * creates its nubs. Device support (CPUs, disk, console, ...) is added by the paravirtual kexts, not here.
++ *
++ * Matched through the built-in personality in iokit/KernelConfigTables.cpp with a higher probe score than
++ * IOPanicPlatform, so IOKit picks it instead of panicking with "Unable to find driver for this platform".
++ */
++#include <IOKit/IOPlatformExpert.h>
++
++class BeringiaPlatform : public IODTPlatformExpert
++{
++	OSDeclareDefaultStructors(BeringiaPlatform);
++
++public:
++	/*
++	 * IODTPlatformExpert is abstract only through these two. They are name lists, not optional pointers: returning
++	 * NULL would make IODTFindMatchingEntries match every entry (and deleteList would delete the whole DT,
++	 * /options included, which processTopLevel then needs). An empty string matches nothing: keep the whole DT.
++	 */
++	virtual const char * deleteList( void ) APPLE_KEXT_OVERRIDE { return ""; }
++	virtual const char * excludeList( void ) APPLE_KEXT_OVERRIDE { return ""; }
++
++	/* There is no NVRAM on the hosted platform, and saving the panic log to it would wedge the machine; the host
++	 * already captures the whole console (including the backtrace) synchronously to a file on the Windows side. */
++	virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length) APPLE_KEXT_OVERRIDE
++	{
++		(void)buffer;
++		return length;
++	}
++};
++
++OSDefineMetaClassAndStructors(BeringiaPlatform, IODTPlatformExpert);
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 559a9db..aef04cc 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -34,6 +34,13 @@
+ 
+ const char * gIOKernelConfigTables =
+     "("
++    /* BERINGIA: the hosted platform expert matches the boot DT ahead of IOPanicPlatform */
++    "   {"
++    "     'IOClass'         = BeringiaPlatform;"
++    "     'IOProviderClass' = IOPlatformExpertDevice;"
++    "     'IONameMatch'     = 'Beringia1,1';"
++    "     'IOProbeScore'    = 1000:32;"
++    "   },"
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"
+     "     'IOProviderClass' = IOPlatformExpertDevice;"
+diff --git a/iokit/conf/files b/iokit/conf/files
+index ac2aa95..27e93e5 100644
+--- a/iokit/conf/files
++++ b/iokit/conf/files
+@@ -40,6 +40,7 @@ iokit/Kernel/IOConditionLock.cpp			optional iokitcpp
+ 
+ #iokit/Kernel/IORuntime.cpp				optional iokitcpp
+ iokit/Kernel/IOStartIOKit.cpp				optional iokitcpp
++iokit/Kernel/BeringiaPlatform.cpp			optional iokitcpp
+ 
+ iokit/Kernel/IODeviceTreeSupport.cpp			optional iokitcpp
+ 

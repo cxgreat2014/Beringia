@@ -16,3 +16,8 @@ hosted/0011-route-the-tsc-deadline-timer-and-idle-to-the.patch
 hosted/0012-fall-back-to-the-host-csprng-before-corecrypto.patch
 hosted/0013-end-the-run-on-halt-reboot-instead-of-resetting.patch
 hosted/0014-fall-back-to-host-csprng-in-read-random-before.patch
+hosted/0015-add-beringiaplatform-a-minimal.patch
+hosted/0016-make-iodtnvram-a-stub-no-nvram-on-the-hosted.patch
+hosted/0017-getproperty-returns-null-for-a-nub-with-no.patch
+hosted/0018-rtclock-heartbeat-debug.patch
+hosted/0019-interrupt-delivery-debug-debug.patch

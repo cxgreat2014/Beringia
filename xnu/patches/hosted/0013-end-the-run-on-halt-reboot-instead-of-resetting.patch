@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 05:16:57 +0800
-Subject: [PATCH 16/17] hosted: end the run on halt/reboot instead of resetting
+Subject: [PATCH 16/22] hosted: end the run on halt/reboot instead of resetting
  the VM
 
 ---
