@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 00:25:19 +0800
+Subject: [PATCH] hosted: log fatal userspace exception details (bring-up aid)
+
+Print the exception type and the two Mach code words on EXC_BAD_ACCESS /
+EXC_BAD_INSTRUCTION / EXC_ARITHMETIC. This is what made the recovery
+launchd's crash legible: EXC_BAD_ACCESS with fault address 0 (a NULL
+pointer passed to a string/memory routine), rather than a bare
+"initproc failed to start".
+---
+ osfmk/kern/exception.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 49c0c53..ab232a9 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -212,6 +212,12 @@ exception_deliver(
+ 	thread_set_status_flags_t get_flags = TSSF_TRANSLATE_TO_USER;
+ 	thread_set_status_flags_t set_flags = TSSF_CHECK_USER_FLAGS;
+ 
++	/* BERINGIA: userspace bring-up aid — show what a fatal userspace exception actually was. */
++	if (codeCnt >= 2 && (exception == EXC_BAD_ACCESS || exception == EXC_BAD_INSTRUCTION || exception == EXC_ARITHMETIC)) {
++		printf("BERINGIA: user exception %d code %#llx %#llx (thread %p)\n",
++		    exception, (unsigned long long)code[0], (unsigned long long)code[1], thread);
++	}
++
+ 	/*
+ 	 *  Save work if we are terminating.
+ 	 *  Just go back to our AST handler.
+@@ -981,6 +987,12 @@ bsd_exception(
+ 	task = current_task();
+ 	mutex = &task->itk_lock_data;
+ 
++	/* BERINGIA: userspace bring-up aid — show what a fatal userspace exception actually was. */
++	if (codeCnt >= 2 && (exception == EXC_BAD_ACCESS || exception == EXC_BAD_INSTRUCTION || exception == EXC_ARITHMETIC)) {
++		printf("BERINGIA: user exception %d code %#llx %#llx (thread %p)\n",
++		    exception, (unsigned long long)code[0], (unsigned long long)code[1], self);
++	}
++
+ 	kr = exception_deliver(self, exception, code, codeCnt, task->exc_actions, mutex);
+ 
+ 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED) {
