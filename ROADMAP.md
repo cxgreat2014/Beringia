@@ -9,7 +9,7 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
 | M1 | Host foundation | Carve-outs claimed; world-switch self-test: enter a test world (own CR3/GDT/IDT/TSS), take and forward a Linux timer interrupt, return, 10⁶ round trips without a Linux warning | ✅ |
 | M2 | XNU early boot | `vstart` → `i386_init` → `kernel_bootstrap_thread`; XNU's console and panics reach the host log | ✅ |
 | M3 | Time, idle, CPUs | Scheduler runs with a host timer; idle sleeps in Linux; 1 then N hosted CPUs with IPIs; no RCU stall / soft lockup over 10 min | 🔨 (single CPU: host timer, idle and interrupt forwarding work; 10-min run and SMP not done) |
-| M4 | Platform & kernel collection | `BeringiaPlatform`/`BeringiaCPU` kexts; KC built on Linux from Beringia's kernel + 25A353 Apple kexts; IOKit reaches "waiting for root device" | 🔨 (bare kernel reaches `bsd_init` and stops at "pthread kernel extension not loaded": the KC is next) |
+| M4 | Platform & kernel collection | `BeringiaPlatform`/`BeringiaCPU` kexts; KC built on Linux from Beringia's kernel + 25A353 Apple kexts; IOKit reaches "waiting for root device" | 🔨 (a prelinked kernel with Apple's corecrypto + pthread, linked on Linux with OpenCorePkg, reaches "Still waiting for root device"; the security stack is next) |
 | M5 | First macOS 26 userspace | `BeringiaDisk` + 25A353 recovery ramdisk as root; `launchd` (PID 1) starts and runs a shell | ⬜ |
 | M6 | Full macOS 26 system | System volume built from the 25A353 OTA payload; multi-user boot; console login; network (`BeringiaNet`), `ssh` into macOS | ⬜ |
 | M7 | Display & input | Framebuffer + input kexts; WindowServer and loginwindow on the CPU renderer; screenshot from the host | ⬜ |
@@ -33,6 +33,10 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
   `legacy_init`). With that and the other hosted guards fixed, the bare kernel boots through IOKit, `trust_cache_init`
   (stubbed), `machine_lockdown` and into `bsd_init`, where it stops at "pthread kernel extension not loaded": the
   kernel collection (M4) is next. Details and run directories: [docs/current-issues.md](docs/current-issues.md).
+- 2026-11-26 (evening): M4 spike. Apple's kexts link on Linux with OpenCorePkg's OcAppleKernelLib into a legacy
+  prelinked kernel; with corecrypto (FIPS self-test passes) and pthread, XNU boots to "Still waiting for root device"
+  and idles there cleanly for 10 minutes. Same C++ ABI as Apple's kernel (all 348 vtables, slot by slot).
+  [docs/research/m4-spike.md](docs/research/m4-spike.md).
 
 ## Known open questions
 
