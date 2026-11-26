@@ -17,6 +17,9 @@
 
 static char *kernel = "/lib/firmware/beringia/kernel";
 module_param(kernel, charp, 0444);
+static char *ramdisk = "";
+module_param(ramdisk, charp, 0444);
+MODULE_PARM_DESC(ramdisk, "a memory-disk image (HFS+ root filesystem) for memdev pmd0 + rd=md0");
 static char *boot_args = "-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1";
 module_param(boot_args, charp, 0444);
 static int linux_cpu = 1;
@@ -108,6 +111,7 @@ static int __init ldr_init(void)
 	err = ldr_macho_load(image, size);
 	if (err)
 		return err;
+	ldr.ramdisk_path = ramdisk[0] ? ramdisk : NULL;
 	err = ldr_boot_build(boot_args);
 	if (err)
 		return err;

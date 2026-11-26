@@ -17,6 +17,7 @@
 #define kBootArgsVersion2       2
 #define kBootArgsEfiMode64      64
 
+#define kEfiReservedMemoryType  0
 #define kEfiLoaderData          2
 #define kEfiConventionalMemory  7
 

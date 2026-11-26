@@ -33,6 +33,9 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
   `legacy_init`). With that and the other hosted guards fixed, the bare kernel boots through IOKit, `trust_cache_init`
   (stubbed), `machine_lockdown` and into `bsd_init`, where it stops at "pthread kernel extension not loaded": the
   kernel collection (M4) is next. Details and run directories: [docs/current-issues.md](docs/current-issues.md).
+- 2026-11-26 (late): M5 begins. The loader boots a RAM-disk root (`ramdisk=`); HFS.kext and apfs.kext from the
+  KDK mount filesystems; Apple's recovery ramdisk runs its real launchd (ignition banner), the first Apple userland
+  on Beringia. Next: the ignition stall and a real system volume.
 - 2026-11-26 (night): M4-c and the M4 exit. The security stack (28 kexts) loads: AppleImage4, AMFI, Sandbox,
   Quarantine, AppleSystemPolicy, AppleKeyStore; `trust_cache_init` passes; 14 minutes at the root-device wait with
   no Linux warnings. `tools/kc/deps.py` computes the kext closure (honouring `OSBundleLibraries_x86_64`).

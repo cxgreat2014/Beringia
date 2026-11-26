@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 23:47:50 +0800
+Subject: [PATCH] hosted: tolerate missing AMFI and block-storage classes in
+ minimal bring-up sets
+
+Two guards for a kernel collection that does not have every kext loaded:
+- IOService::setRootMedia asserts IOBlockStorageDriver's metaclass exists; with no IOStorageFamily loaded (a minimal
+  bring-up set rooting from a memdev) there is no block storage class, so just return.
+- IOTaskHasEntitlement and its variants dereference the amfi interface; without AMFI it is NULL. Return "no
+  entitlement" instead of faulting (ux_handler_setup and the code-signature path call these).
+Neither changes behaviour when AMFI and IOStorageFamily are present.
+---
+ iokit/Kernel/IOService.cpp    |  5 +++++
+ iokit/bsddev/IOKitBSDInit.cpp | 16 ++++++++++++++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
+index 395e5ec..af12d7f 100644
+--- a/iokit/Kernel/IOService.cpp
++++ b/iokit/Kernel/IOService.cpp
+@@ -5422,6 +5422,11 @@ IOService::setRootMedia(IOService * root)
+ 	bool unhide;
+ 
+ 	ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
++	/* BERINGIA: a bring-up set without IOStorageFamily loaded has no block storage classes at all; rooting from
++	 * a memdev then must not assert (there is simply no root block storage driver to record). */
++	if (!ioblockstoragedriverClass) {
++		return;
++	}
+ 	assert(ioblockstoragedriverClass);
+ 
+ 	while (root) {
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index a77da13..17aea37 100644
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -1572,6 +1572,10 @@ IOTaskHasStringEntitlement(task_t task, const char *entitlement, const char *val
+ 	if (proc == NULL) {
+ 		return false;
+ 	}
++	/* BERINGIA: a bring-up kernel collection without AMFI has no amfi interface; treat every entitlement as absent. */
++	if (amfi == NULL) {
++		return false;
++	}
+ 
+ 	kern_return_t ret = amfi->OSEntitlements.queryEntitlementStringWithProc(
+ 		proc,
+@@ -1607,6 +1611,10 @@ IOTaskHasEntitlement(task_t task, const char *entitlement)
+ 	if (proc == NULL) {
+ 		return false;
+ 	}
++	/* BERINGIA: a bring-up kernel collection without AMFI has no amfi interface; treat every entitlement as absent. */
++	if (amfi == NULL) {
++		return false;
++	}
+ 
+ 	kern_return_t ret = amfi->OSEntitlements.queryEntitlementBooleanWithProc(
+ 		proc,
+@@ -1637,6 +1645,10 @@ IOTaskGetIntegerEntitlement(task_t task, const char *entitlement, uint64_t *valu
+ 	if (proc == NULL) {
+ 		return false;
+ 	}
++	/* BERINGIA: a bring-up kernel collection without AMFI has no amfi interface; treat every entitlement as absent. */
++	if (amfi == NULL) {
++		return false;
++	}
+ 
+ 	kern_return_t ret = amfi->OSEntitlements.copyEntitlementAsOSObjectWithProc(
+ 		proc,
+@@ -1726,6 +1738,10 @@ IOTaskHasEntitlementAsBooleanOrObject(task_t task, const char *entitlement)
+ 	if (proc == NULL) {
+ 		return false;
+ 	}
++	/* BERINGIA: a bring-up kernel collection without AMFI has no amfi interface; treat every entitlement as absent. */
++	if (amfi == NULL) {
++		return false;
++	}
+ 
+ 	kern_return_t ret = amfi->OSEntitlements.queryEntitlementBooleanWithProc(
+ 		proc,

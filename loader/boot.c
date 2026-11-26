@@ -208,6 +208,54 @@ static int fill_shared(void)
 	return 0;
 }
 
+/*
+ * A memory disk for XNU's memdev (boot args pmd0=base.size, rd=md0): the image sits right after the boot data,
+ * 2 MiB aligned, inside the used extent boot_args reports (kaddr + ksize), so XNU's early page tables go after it.
+ */
+static int load_ramdisk(void)
+{
+	u64 size, off, pa;
+	void *f;
+	u8 *dst;
+
+	if (!ldr.ramdisk_path)
+		return 0;
+	f = bh_file_open(ldr.ramdisk_path, 0, &size);
+	if (!f) {
+		bh_logf("xnu: cannot open ramdisk %s", ldr.ramdisk_path);
+		return -ENOENT;
+	}
+	if (!size || (size & 4095)) {
+		bh_logf("xnu: ramdisk size %#llx is not a nonzero multiple of 4096", size);
+		bh_file_close(f);
+		return -EINVAL;
+	}
+	pa = (ldr.physfree + (2ULL << 20) - 1) & ~((2ULL << 20) - 1);
+	if (pa + size > ldr.low.pa + ldr.low.size) {
+		bh_file_close(f);
+		return -ENOSPC;
+	}
+	dst = bh_phys(pa, size);
+	if (!dst) {
+		bh_file_close(f);
+		return -ENOSPC;
+	}
+	for (off = 0; off < size;) {
+		long r = bh_file_rw(f, 0, dst + off, min_t(u64, size - off, 1 << 20), off);
+
+		if (r <= 0) {
+			bh_file_close(f);
+			return r < 0 ? r : -EIO;
+		}
+		off += r;
+	}
+	bh_file_close(f);
+	ldr.ramdisk_pa = pa;
+	ldr.ramdisk_size = size;
+	bh_logf("xnu: ramdisk %s at PA %#llx, %#llx bytes (memdev pmd0, root rd=md0)", ldr.ramdisk_path, pa, size);
+	return 0;
+}
+
 int ldr_boot_build(const char *cmdline)
 {
 	struct xnu_boot_args *ba;
@@ -224,6 +272,9 @@ int ldr_boot_build(const char *cmdline)
 	mm = bh_phys(ldr.memmap_pa, 4096);
 	if (!ba || !mm || !bh_phys(ldr.dt_pa, 16384) || ldr.physfree > ldr.low.pa + ldr.low.size)
 		return -ENOSPC;
+	err = load_ramdisk();
+	if (err)
+		return err;
 
 	memset(ba, 0, sizeof(*ba));
 	memset(mm, 0, 4096);
@@ -240,6 +291,10 @@ int ldr_boot_build(const char *cmdline)
 	ba->Version = kBootArgsVersion2;
 	ba->efiMode = kBootArgsEfiMode64;
 	strscpy(ba->CommandLine, cmdline, sizeof(ba->CommandLine));
+	if (ldr.ramdisk_size)
+		scnprintf(ba->CommandLine + strlen(ba->CommandLine),
+		    sizeof(ba->CommandLine) - strlen(ba->CommandLine),
+		    " pmd0=%#llx.%#llx rd=md0", ldr.ramdisk_pa, ldr.ramdisk_size);
 	ba->MemoryMap = ldr.memmap_pa;
 	ba->MemoryMapSize = n * sizeof(*mm);
 	ba->MemoryMapDescriptorSize = sizeof(*mm);
@@ -255,7 +310,9 @@ int ldr_boot_build(const char *cmdline)
 			dt_debug_walk(base, 0);
 	}
 	ba->kaddr = ldr.kaddr;
-	ba->ksize = ldr.physfree - ldr.kaddr;
+	/* ksize covers the kernel, the boot data AND the RAM disk: XNU places its early page tables (KPTphys, from
+	 * Idle_PTs_init) at kaddr + ksize, so the RAM disk must be inside the used extent or they overwrite it. */
+	ba->ksize = (ldr.ramdisk_size ? ldr.ramdisk_pa + ldr.ramdisk_size : ldr.physfree) - ldr.kaddr;
 	ba->kslide = ldr.slide;
 	ba->PhysicalMemorySize = total;
 	ba->FSBFrequency = bh_tsc_hz();

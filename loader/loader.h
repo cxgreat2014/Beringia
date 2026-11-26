@@ -16,6 +16,8 @@ struct ldr {
 	u64 slide;                      /* VA and PA slide of the kernel (= low.pa) */
 	u64 kaddr, kend;                /* physical extent of the kernel image */
 	u64 boot_args_pa, memmap_pa, dt_pa, dt_len, pml4_pa, physfree;
+	const char *ramdisk_path;       /* a memory-disk image to boot from (memdev pmd0), or NULL */
+	u64 ramdisk_pa, ramdisk_size;   /* where ldr_boot_build placed it (reserved in the memory map) */
 	u64 sym_vstart, sym_stack, sym_hook, sym_shared;     /* slid virtual addresses */
 	struct beringia_shared *shared; /* host address of XNU's beringia_shared */
 	unsigned int ncpus;

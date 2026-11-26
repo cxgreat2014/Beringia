@@ -5,22 +5,22 @@ An honest account of where Beringia stands, what is broken, and what is next. Ev
 directory (`$BERINGIA_WIN_DIR/runs/<id>/`, see [debugging.md](debugging.md)) that shows it. For the architecture, see
 [architecture.md](architecture.md); for milestones, [../ROADMAP.md](../ROADMAP.md).
 
-## Where XNU gets to today (2026-11-26, runs 20261126-224146 and 20261126-224344)
+## Where XNU gets to today (2026-11-26, runs 20261126-233250, 20261126-231845)
 
-With a prelinked kernel holding the security stack (`scripts/kc/build.sh --closure ...`: pthread, corecrypto,
-CoreTrust, AppleImage4, AppleMobileFileIntegrity, Sandbox, Quarantine, AppleSystemPolicy, AppleKeyStore, AppleMatch
-and their dependencies, 28 kexts from the 25A353 KDK), XNU boots through:
+**M4 is done** (security stack, 14-minute clean run), and **M5 has started: real Apple userland runs.**
 
-- `PE_init_iokit`: the prelinked kexts are registered and started; corecrypto's FIPS self-test passes (20/20);
-- **the security extensions all load**: AppleImage4 hooks, AMFI ("Booted in a VM", "developer mode is force
-  enabled"), Seatbelt sandbox, Quarantine, AppleSystemPolicy; AppleKeyStore and AppleCredentialManager start
-  (`_sep_enabled = 0`, so AMFI cannot get a local signing public key from AKS: expected without a SEP);
-- `trust_cache_init` succeeds (the img4 interface is present; no static trust caches are supplied yet);
-- `bsd_init` and the network stack, then "Still waiting for root device".
-
-A 14-minute run in that state logged **no Linux warnings and no state-safety-net reports** (run 20261126-224344).
-That is the M4 exit condition with M4-c done. M4 needed one more hosted patch: AppleImage4's expert dump queries
-"non-executable privilege level" with a null property name (patch 0032 returns "no such property").
+- The loader boots a RAM-disk root: `ramdisk=` module parameter, the image placed after the boot data inside the
+  extent `boot_args` reports (`kaddr + ksize`, so XNU's early page tables go after it), memdev `pmd0=` + `rd=md0`.
+  `scripts/ramdisk/build.sh` builds a small HFS+ test root with a static init; `tests/host/` has the x86_64
+  memcheck/fpcheck isolation tests (both pass on a quiet host and detect deliberate corruption).
+- Filesystems come from the KDK, not the kernel source (open-source XNU has no `bsd/hfs`): `HFS.kext` mounts the
+  test HFS+ root; `apfs.kext` (+ Zlib/Dataless) mounts Apple's `x86_64SURamDisk.dmg` recovery image.
+- With the full security stack and APFS, **Apple's real launchd executes** from the recovery ramdisk (run
+  20261126-233250): APFS mounts, `load_init_program` runs `/sbin/launchd`, and it prints the Darwin Ignition
+  Sequence banner. It then stops progressing in ignition (next thing to investigate: it likely wants the boot
+  environment/system volumes a real boot provides).
+- A self-written unsigned `/sbin/launchd` is rejected by AMFI ("The system only allows platform binaries"): use
+  Apple-signed userland, or expect to work around AMFI for custom test programs.
 
 ## Fixed today (and why the VM used to wedge)
 

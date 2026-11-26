@@ -29,6 +29,12 @@ img=${BERINGIA_KERNEL:-$BERINGIA_BUILD/xnu/obj/DEVELOPMENT_X86_64/kernel.develop
 [ -f "$img" ] || die "no $img (scripts/xnu/build.sh)"
 mkdir -p /lib/firmware/beringia
 install -m 0644 "$img" /lib/firmware/beringia/kernel
+ramdisk_param=
+if [ -n "${BERINGIA_RAMDISK:-}" ]; then
+	[ -f "$BERINGIA_RAMDISK" ] || die "no ramdisk image at $BERINGIA_RAMDISK"
+	install -m 0644 "$BERINGIA_RAMDISK" /lib/firmware/beringia/ramdisk
+	ramdisk_param="ramdisk=/lib/firmware/beringia/ramdisk"
+fi
 
 # The per-run directory on the Windows side: never reused, so one run's evidence is not overwritten by the next.
 run_id=$(date +%Y%m%d-%H%M%S)
@@ -49,6 +55,7 @@ if [ -n "${BERINGIA_WIN_DIR:-}" ]; then
 		echo "kernel_sha256=$(sha256sum "$img" | cut -d' ' -f1)"
 		echo "carve=$BERINGIA_CARVE"
 		echo "boot_args=${BERINGIA_BOOT_ARGS:-<loader default>}"
+		echo "ramdisk=${BERINGIA_RAMDISK:-<none>}"
 		echo "linux_cpu=${BERINGIA_LINUX_CPU:-1}"
 	} > "$run_dir/meta.txt"
 else
@@ -84,7 +91,7 @@ fi
 
 insmod "$BERINGIA_ROOT/host/beringia_host.ko" carve="$BERINGIA_CARVE" ${BERINGIA_TRACE:+trace="$BERINGIA_TRACE"}
 # Module parameters are split at spaces unless the value is in double quotes, which must reach the kernel literally.
-insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" \
+insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" ${ramdisk_param:+"$ramdisk_param"} \
 	${BERINGIA_BOOT_ARGS:+"boot_args=\"$BERINGIA_BOOT_ARGS\""}
 sleep "$secs"
 dmesg | grep -E "beringia|BUG:|Oops:|RIP:|WARNING:|rcu:|watchdog:" | tail -200
