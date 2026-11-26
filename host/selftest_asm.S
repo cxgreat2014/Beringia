@@ -3,8 +3,9 @@
  * The self-test's foreign kernel: a few hundred bytes of code that run in the foreign world the way XNU will, with
  * their own CR3 (a copy of Linux's top-level table), GDT (XNU's selector layout), IDT and TSS (IST1 for interrupts).
  *
- *  - bh_st_main: interrupts on, spin, execute ud2 (handled by its own IDT: the #UD handler skips it), make a host
- *    call, repeat. Never returns: the host ends the run from a host call.
+ *  - bh_st_main: interrupts on, spin, execute ud2 (handled by its own IDT: the #UD handler skips it), optionally
+ *    change IA32_PAT behind the host's back (as XNU's pat_init would), make a host call, repeat. Never returns: the
+ *    host ends the run from a host call.
  *  - bh_st_vectors: external interrupts, forwarded to the host with a host call (as XNU's interrupt() will).
  *
  * Executed in the foreign world: SYM_CODE, plain ret, excluded from objtool (see world.S).
@@ -22,6 +23,7 @@ SYM_CODE_START(bh_st_main)
 	UNWIND_HINT_UNDEFINED
 	ANNOTATE_NOENDBR
 	movq	%rdi, %rbx			/* spin count between host calls */
+	movq	%rsi, %r12			/* flags: bit 0 = tamper with IA32_PAT (the host must notice and restore it) */
 1:	sti
 	movq	%rbx, %rcx
 2:	pause
@@ -29,6 +31,13 @@ SYM_CODE_START(bh_st_main)
 	jnz	2b
 	ud2
 	lock incq bh_st_loops(%rip)
+	testq	$1, %r12
+	jz	3f
+	movl	$0x277, %ecx			/* IA32_PAT: flip bit 0 of PA6 (UC- <-> WB, WC <-> UC; always a valid type) */
+	rdmsr
+	xorl	$0x10000, %edx
+	wrmsr
+3:
 	movl	$HC_YIELD, %edi
 	xorl	%esi, %esi
 	xorl	%edx, %edx

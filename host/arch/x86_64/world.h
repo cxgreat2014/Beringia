@@ -138,6 +138,8 @@ int bh_world_init(void);                               /* IDTs; checks the CPU *
 long bh_world_run(int index, u64 cr3, u64 rip, u64 rsp, u64 rdi, u64 rsi, long (*fn)(int, unsigned long, unsigned long, unsigned long));
 /* Install a foreign IDT for the first entry (default: the boot IDT); IST1 stack top for the boot TSS. */
 void bh_world_set_entry_idt(struct bh_world *w, void *idt, unsigned int limit, u64 ist1);
+/* Number of unswitched Linux CPU state changes the safety net found (and repaired) after foreign-world exits. */
+long bh_world_state_diffs(void);
 #endif
 
 #endif /* BERINGIA_WORLD_H */

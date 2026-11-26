@@ -14,10 +14,125 @@
 #include <asm/special_insns.h>
 #include <asm/processor.h>
 #include <asm/tlbflush.h>
+#include <asm/debugreg.h>
+#include <linux/atomic.h>
+#include <linux/moduleparam.h>
 #include "world.h"
 #include "../../internal.h"
 
 struct bh_world bh_worlds[BH_MAX_CPUS];
+
+/*
+ * The state safety net. Some CPU state of the Linux world is not switched, because the foreign kernel is not supposed
+ * to change it: CR4, CR8 (the task priority), DR7 and a few machine-wide MSRs. It is captured right before every entry
+ * into the foreign world and compared right after every return, so a difference is the foreign kernel's doing. It is
+ * reported once per register and CPU and restored, except IA32_APIC_BASE: a local APIC that was disabled or switched
+ * out of x2APIC mode has lost its configuration, the CPU no longer receives interrupts, and the run has to end.
+ */
+static unsigned int statecheck = 1;
+module_param(statecheck, uint, 0644);
+MODULE_PARM_DESC(statecheck, "compare (and restore) Linux's unswitched CPU state after every foreign-world exit");
+
+enum {
+	HW_CR4, HW_CR8, HW_DR7, HW_PAT, HW_EFER, HW_APIC_BASE, HW_DEBUGCTL, HW_MTRR_DEF, HW_MISC_ENABLE,
+	HW_PERF_GLOBAL, HW_PERF_FIXED, HW_N
+};
+
+static const struct {
+	const char *name;
+	u32 msr;
+	bool fatal;
+} hw_regs[HW_N] = {
+	[HW_CR4]         = { "CR4" },
+	[HW_CR8]         = { "CR8" },
+	[HW_DR7]         = { "DR7" },
+	[HW_PAT]         = { "IA32_PAT", MSR_IA32_CR_PAT },
+	[HW_EFER]        = { "EFER", MSR_EFER },
+	[HW_APIC_BASE]   = { "IA32_APIC_BASE", MSR_IA32_APICBASE, true },
+	[HW_DEBUGCTL]    = { "IA32_DEBUGCTL", MSR_IA32_DEBUGCTLMSR },
+	[HW_MTRR_DEF]    = { "IA32_MTRR_DEF_TYPE", MSR_MTRRdefType },
+	[HW_MISC_ENABLE] = { "IA32_MISC_ENABLE", MSR_IA32_MISC_ENABLE },
+	[HW_PERF_GLOBAL] = { "IA32_PERF_GLOBAL_CTRL", MSR_CORE_PERF_GLOBAL_CTRL },
+	[HW_PERF_FIXED]  = { "IA32_FIXED_CTR_CTRL", MSR_CORE_PERF_FIXED_CTR_CTRL },
+};
+
+static unsigned int hw_present;		/* bit i: hw_regs[i] can be read on this machine (MSRs probed at load) */
+static struct {
+	u64 v[HW_N];
+	unsigned int reported;
+} hw_snap[BH_MAX_CPUS];
+static atomic_long_t hw_diffs;
+
+static void hw_probe(void)
+{
+	u64 x;
+	int i;
+
+	hw_present = BIT(HW_CR4) | BIT(HW_CR8) | BIT(HW_DR7);
+	for (i = 0; i < HW_N; i++)
+		if (hw_regs[i].msr && !rdmsrq_safe(hw_regs[i].msr, &x))
+			hw_present |= BIT(i);
+}
+
+static void hw_read(u64 *v)
+{
+	int i;
+
+	v[HW_CR4] = __read_cr4();
+	asm volatile("mov %%cr8, %0" : "=r"(v[HW_CR8]));
+	v[HW_DR7] = native_get_debugreg(7);
+	for (i = 0; i < HW_N; i++)
+		if (hw_regs[i].msr && (hw_present & BIT(i)))
+			rdmsrq(hw_regs[i].msr, v[i]);
+}
+
+static void hw_write(int i, u64 v)
+{
+	switch (i) {
+	case HW_CR4:
+		asm volatile("mov %0, %%cr4" : : "r"(v) : "memory");
+		break;
+	case HW_CR8:
+		asm volatile("mov %0, %%cr8" : : "r"(v) : "memory");
+		break;
+	case HW_DR7:
+		native_set_debugreg(7, v);
+		break;
+	default:
+		wrmsrq_safe(hw_regs[i].msr, v);
+		break;
+	}
+}
+
+/* After a foreign-world exit, interrupts off. Returns false if the run cannot continue on this CPU. */
+static bool hw_check(struct bh_world *w)
+{
+	u64 now[HW_N], *was = hw_snap[w->index].v;
+	bool ok = true;
+	int i;
+
+	hw_read(now);
+	for (i = 0; i < HW_N; i++) {
+		if (!(hw_present & BIT(i)) || now[i] == was[i])
+			continue;
+		atomic_long_inc(&hw_diffs);
+		if (!(hw_snap[w->index].reported & BIT(i))) {
+			hw_snap[w->index].reported |= BIT(i);
+			bh_logf("cpu %llu: the foreign kernel changed %s: %#llx -> %#llx (%s)", w->index, hw_regs[i].name,
+				was[i], now[i], hw_regs[i].fatal ? "cannot be repaired, ending the run" : "restored");
+		}
+		if (hw_regs[i].fatal)
+			ok = false;
+		else
+			hw_write(i, was[i]);
+	}
+	return ok;
+}
+
+long bh_world_state_diffs(void)
+{
+	return atomic_long_read(&hw_diffs);
+}
 
 /* 16-byte IDT gate */
 struct bh_gate {
@@ -77,6 +192,7 @@ int bh_world_init(void)
 	bh_tidt_foreign_desc.address = (unsigned long)bh_tidt_foreign;
 	bh_tidt_linux_desc.size = sizeof(bh_tidt_linux) - 1;
 	bh_tidt_linux_desc.address = (unsigned long)bh_tidt_linux;
+	hw_probe();
 	return 0;
 }
 
@@ -127,6 +243,8 @@ void bh_world_capture_linux(struct bh_world *w)
 	w->l_cr0 = read_cr0();
 	w->l_sel = read_sel(0) | ((u64)read_sel(1) << 16) | ((u64)read_sel(2) << 32) | ((u64)read_sel(3) << 48);
 	w->l_ss = read_sel(4);
+	if (statecheck)
+		hw_read(hw_snap[w->index].v);
 }
 
 /* The initial foreign GDT (XNU's selector layout) and TSS of world w. */
@@ -198,6 +316,7 @@ long bh_world_run(int index, u64 cr3, u64 rip, u64 rsp, u64 rdi, u64 rsi,
 	w->x_ss = BHW_F_SS;
 	w->x_sel = 0;
 	w->x_tsc_aux = BHW_TSC_AUX_MAGIC | index;
+	hw_snap[index].reported = 0;
 
 	local_irq_disable();
 	preempt_disable();
@@ -228,6 +347,9 @@ long bh_world_dispatch(struct bh_world *w)
 	long r;
 
 	kernel_fpu_end();
+	/* before anything in Linux can run on a state the foreign kernel changed (interrupts are still off) */
+	if (statecheck && !hw_check(w))
+		return BH_ABORT_VALUE;
 	r = fn((int)w->index, w->nr, w->a1, w->a2);
 	local_irq_disable();
 	if (r == BH_ABORT_VALUE)
