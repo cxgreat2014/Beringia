@@ -1,75 +1,74 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Current implementation issues and open work
 
-An honest account of where Beringia stands, what is broken, and what is next. For the architecture that is already
-proven, see [architecture.md](architecture.md) and the milestone list in [../ROADMAP.md](../ROADMAP.md).
+An honest account of where Beringia stands, what is broken, and what is next. Every "reaches X" below names the run
+directory (`$BERINGIA_WIN_DIR/runs/<id>/`, see [debugging.md](debugging.md)) that shows it. For the architecture, see
+[architecture.md](architecture.md); for milestones, [../ROADMAP.md](../ROADMAP.md).
 
-## Where XNU gets to today
+## Where XNU gets to today (2026-11-26, run 20261126-162031)
 
-`beringia_host.ko` + `beringia_xnu.ko` boot the hosted XNU (`xnu-12377.1.9`, macOS 26.0) on WSL2 through:
+The bare kernel (`xnu-12377.1.9` + `xnu/series`, no kernel collection) boots on one hosted CPU through:
 
-- `vstart`, `i386_init`, the entire memory subsystem (pmap bootstrap, VM bootstrap, zones),
-- scheduler initialization, `kernel_bootstrap_thread`,
-- `PE_init_iokit`: `BeringiaPlatform` (an `IODTPlatformExpert`) matches the boot device tree and IOKit creates the
-  device-tree nubs and reaches `IOServicePH` system-capability changes.
+- `vstart`, `i386_init`, pmap/VM bootstrap, zones, the scheduler, `kernel_bootstrap_thread`;
+- `PE_init_iokit` (BeringiaPlatform), IOKit system capability changes, IONVRAM (stub);
+- `vm_commpage_init`, `mac_policy_initmach`, `dtrace_early_init`, `trust_cache_init` (stubbed, see below),
+  `machine_lockdown`, `PE_lockdown_iokit`;
+- `bsd_init`: MAC framework, buffer headers, `IOKitInitializeTime` (host wall clock), lockdown mode, `mbinit`, aio;
 
-Everything is on real hardware: real physical memory for XNU, its own CR3/GDT/IDT/TSS/MSRs while it runs, and Linux
-interrupts forwarded into it. The host's self-test (`scripts/run/selftest.sh`) proves the world switch at 10M+ round
-trips and tens of thousands of forwarded interrupts with no Linux warning.
+and then stops, as expected, at:
 
-## Active blocker: the XNU timer is not being delivered
+```
+panic: pthread kernel extension not loaded (function table is NULL). @pthread_shims.c:319
+```
 
-**`rtclock_intr` is never called** (an instrumented heartbeat in `rtclock_intr` never fires). Consequences: IOKit's
-workloops have no clock and stall during capability changes instead of reaching "waiting for root device".
+`pthread.kext` (like AppleImage4, AMFI, corecrypto, Sandbox, APFS) comes from the macOS 26 kernel collection: this is
+the start of **M4**. The panic ends the run cleanly (the host unloads, Linux is unaffected).
 
-What the bring-up diagnostics established (this is why a bare "it does not boot" would be misleading):
+Along the way the hosted CPU's timer, idle and interrupt forwarding work: the host timer fires and is delivered to
+`rtclock_intr`, external interrupts are forwarded to Linux, `machine_idle` sleeps on the host and returns. Across the
+day's runs Linux logged no warnings and the state safety net found no changes to Linux's CPU state.
 
-- `interrupt()` is not being called for external interrupts (`FORWARD_IRQ` hostcalls never happen).
-- `lapic_set_tsc_deadline_timer` is not being reached to arm the host timer (`SET_TIMER` hostcalls never happen).
-- The host-side `bh_idle()` previously never returned, which parked the hosted CPU in `machine_idle` with interrupts
-  off. A bounded wait was added (return after ~4 ms) to stop that class of hang.
-- The kernel *does* reach `machine_idle`, and `setPop` *does* select `rtc_lapic_set_tsc_deadline_timer` as the
-  timer's `rtc_set` implementation (confirmed by disassembly: it calls `lapic_set_tsc_deadline_timer`, whose hosted
-  branch calls `beringia_call(SET_TIMER)`).
+## Fixed today (and why the VM used to wedge)
 
-So the delivery chain `lapic_set_tsc_deadline_timer → SET_TIMER → host hrtimer → PENDING_TIMER → interrupt() →
-rtclock_intr` has a break somewhere, and the next debugging step is to find which link never runs. The instrumented
-hostcalls (`hc nr=…`) currently show only console and idle traffic.
+| Problem | Root cause | Fix |
+|---|---|---|
+| The whole WSL VM wedged the first time XNU idled | The hosted LAPIC uses the xAPIC ops on a RAM page, so `is_x2apic == FALSE`. `lapic_configure()` → `lapic_reinit()` read the *real* `IA32_APIC_BASE`, saw the host's x2APIC mode and called `legacy_init()`, which disables the real local APIC and re-enables it in xAPIC mode. That CPU never received another interrupt; Linux stalled waiting for its IPIs. | XNU patch "never reprogram the host's local APIC" |
+| XNU writes CPU state the world switch does not switch | `pat_init`/MTRRs (with CR0.CD + `wbinvd`), the AP trampoline at physical 0x2000 (host RAM), MCA banks, TSX/SRBDS MSRs, PMU fixed counters | XNU patch "leave the host's memory types, MCA banks, errata MSRs and PMU alone"; PCIDs disabled in code |
+| A timer delivered by a forwarded interrupt was missed | `interrupt()` read the pending word before forwarding | read after forwarding, atomically |
+| `kernel_bootstrap_thread` blocked forever in `ml_wait_max_cpus` | nobody called `ml_set_max_cpus` (normally the ACPI CPU interrupt controller) | BeringiaPlatform announces the host's CPU count |
+| 2 × 30 s waits in `IOKitInitializeTime` | no IORTC, no IONVRAM | BeringiaPlatform publishes both; time of day from the host |
+| `trust_cache_init` panic | no AppleImage4/AMFI in a bare kernel | bring-up stub (no trust caches) until the KC brings AMFI |
+| idle wait of 4 s instead of 4 ms | unit error in `bh_idle` | fixed |
+| boot-args with spaces lost | the kernel splits module parameters at spaces | `boot.sh` passes `boot_args="..."` |
 
-This is the single most important thing to fix before IOKit can proceed. It is **not** a fundamental design problem —
-the world switch and interrupt forwarding are already proven by the self-test — but a bring-up gap in how XNU's
-timer/LAPIC programming is routed to the host.
+## Safety nets now in place
+
+- **State safety net** (`beringia_host.ko statecheck=1`, default): after every exit from the foreign world, CR4, CR8,
+  DR7, IA32_PAT, EFER, IA32_APIC_BASE, DEBUGCTL, MTRR_DEF_TYPE, MISC_ENABLE and the PMU controls are compared with
+  their values at entry; differences are logged once and restored. A changed IA32_APIC_BASE cannot be repaired and
+  ends the run.
+- **Self-test** covers sleeping inside a host call (`selftest_sleep`) and the safety net (`selftest_tamper`).
+- **Thread dump** (`echo 1 > /sys/module/beringia_xnu/parameters/dump`) and `tools/debug/symbolize.py`.
+- **Run directories, host-side console log and the watchdog**: [debugging.md](debugging.md).
 
 ## Known limitations and deliberate bring-up choices
 
 | Area | State |
 |---|---|
-| kalloc_type | Degraded to size-based data zones. Upstream LLVM has no `__builtin_xnu_type_summary` (Apple-clang-only), so typed segregation is unavailable. Same approach as the macOS-DroidVM Linux bring-up. A faithful replacement (clang plugin) is open work. |
-| LAPIC | XNU gets a fake MMIO page (legacy MMIO ops). It never touches the host's real APIC. Timer/IPI delivery must go through the host, not the fake page. |
-| TSC-deadline MSR | Routed to the host (`lapic_set_tsc_deadline_timer`), never written directly by XNU (Hyper-V would fault). |
-| `machine_idle` | Goes through the host (`bh_idle`), bounded so the CPU cannot park forever. |
-| Random numbers | Before corecrypto/prng_funcs register, `read_random`/`cc_rand_generate` fall back to the host CSPRNG. |
-| `IODTNVRAM` | A stub (no NVRAM on the hosted platform). `BeringiaPlatform::savePanicInfo` is a no-op so a panic cannot wedge the VM committing a log to NVRAM. |
-| `getProperty` | Returns NULL for a nub with no property table (would otherwise call `getObject` on NULL). |
-| kexts / kernel collection | Not built yet. Only BeringiaPlatform is linked in statically. Apple kexts from the 25A353 BootKC and a KC builder (`tools/kc/`) are M4 work. |
-| SMP | Single hosted CPU only (`linux_cpu=1` by default). Multi-CPU start and IPIs are M3 work. |
-| Devices | No disk, network, display, or input kexts yet. No userspace yet. |
+| kernel collection | Not built yet. Only BeringiaPlatform is linked in statically. Next: M4. |
+| trust caches | Disabled while AMFI is absent (bring-up stub, to be removed with the KC). |
+| kalloc_type | Degraded to size-based data zones (upstream LLVM has no `__builtin_xnu_type_summary`). Compatibility with Apple's kexts, which carry their own kalloc_type views, is to be verified first thing in M4. |
+| LAPIC | A RAM page with no-op init; timer and IPIs go through the host. |
+| NMI / #MC | **Not forwarded yet**: in the foreign world they enter XNU's own handlers. |
+| NVRAM | IODTNVRAM is a stub; IONVRAM is announced as ready. |
+| SMP | One hosted CPU. The pending word is atomic on both sides already. |
+| Physical memory | XNU's physmap maps all of RAM, the host's included, writable. Restricting it to the carve-outs is open. |
+| Linux latency | While XNU runs with interrupts off, that Linux CPU takes no interrupts. Measure before SMP. |
 
 ## Next steps, in order
 
-1. **Timer delivery (M3)** — find why `lapic_set_tsc_deadline_timer` and `interrupt()` never run, so `rtclock_intr`
-   fires and IOKit proceeds. See [debugging.md](debugging.md) for the instrumentation already in place.
-2. **IOKit to "waiting for root device" (M4)** — once the clock works.
-3. **Platform + kernel collection (M4)** — `BeringiaDisk`, `BeringiaCPU`, and a KC builder for the 25A353 Apple kexts.
-4. **First userspace (M5)** — boot `launchd` from the 25A353 recovery ramdisk and print `sw_vers`.
-5. SMP, full system volume, display/input, then productization.
-
-## Build-system notes
-
-- **Use the unstripped kernel** (`kernel.development.unstripped`). `strip` zeroes the local-relocation table the
-  loader needs, which otherwise fails with "relocation 0 has bad length 0".
-- **Force a clean module rebuild after editing.** Incremental kbuild has missed edits (stale `lapic_native.o`, stale
-  loader objects). When in doubt: `make -C host clean && make -C loader clean` before rebuilding, and `git clean -fdx`
-  is *not* safe to run blindly (it would delete the local `local.env` and the work directories).
-- `scripts/xnu/prepare.sh --check` applies the patch series for real (not `git apply --check`), because a file created
-  by one patch must exist for a later patch that modifies it.
+1. **M4, kernel collection**: extract `pthread`, `AppleImage4`, `AppleMobileFileIntegrity`, `corecrypto`, `Sandbox`,
+   `IOStorageFamily`, `APFS` (and their dependencies) from the 25A353 BootKC; verify that they link and run against
+   the DEVELOPMENT kernel with degraded kalloc_type; build a KC with BeringiaPlatform; remove the trust cache stub.
+2. NMI / #MC forwarding; a long idle stability run (minutes, no Linux warnings).
+3. **M4 exit**: "waiting for root device"; then BeringiaDisk and the SURamDisk (M5: `launchd`).

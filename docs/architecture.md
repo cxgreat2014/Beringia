@@ -64,7 +64,7 @@ At any instant a CPU runs in exactly one **world**:
 | LSTAR / STAR / SFMASK / CSTAR | Linux syscall entry | XNU's (`hi64_syscall`) |
 | IA32_PAT, TSC_AUX | Linux's | Linux's PAT (XNU does not reprogram it), XNU's TSC_AUX |
 | XCR0, FPU/XSAVE state | Linux's | XNU's (saved/restored with XSAVE) |
-| CR0 / CR4 | Linux's | Linux's (XNU must not change them while hosted) |
+| CR0 / CR4 | Linux's | CR0: XNU's (switched). CR4: Linux's; XNU must not change it, and the state safety net checks |
 | S_CET / PL0_SSP | Linux's | 0 (XNU has no CET support) |
 
 The selector clash alone (XNU's `KERNEL64_CS` 0x08 is a 32-bit code segment in Linux's GDT; XNU's `USER64_CS` 0x2b is
@@ -136,7 +136,13 @@ entries 510–511). XNU uses slot 511 (kernel, PDPT entries 0–509), 510 (kext 
   quiescent state, other Linux tasks run).
 - **IPIs between XNU CPUs**: the sender sets the target's pending word and asks the host to kick the target's Linux
   CPU (wake its idle wait or send a reschedule IPI, which is forwarded and followed by XNU's `cpu_signal_handler`).
-- **NMI / #MC** are forwarded to Linux; XNU's own NMI-based facilities (panic NMIs) are unavailable.
+- **NMI / #MC** are meant to be forwarded to Linux (XNU's own NMI-based facilities, panic NMIs, are then
+  unavailable). **Not implemented yet**: in the foreign world they currently enter XNU's own handlers.
+- **State XNU must leave alone.** CR4, CR8, DR7, IA32_PAT, EFER, IA32_APIC_BASE, DEBUGCTL, MTRRs, MISC_ENABLE and
+  the PMU are not switched. XNU's code paths that program them (LAPIC init, PAT/MTRR, MCA, CPU errata workarounds,
+  monotonic) are disabled when hosted, and the host checks after every foreign-world exit that they are
+  unchanged (`statecheck`): differences are restored and logged; a changed IA32_APIC_BASE ends the run, because
+  a local APIC that was disabled has lost its configuration and the CPU no longer takes interrupts.
 
 ## 6. CPUs
 
