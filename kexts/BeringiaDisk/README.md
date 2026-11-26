@@ -158,16 +158,21 @@ insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" \
   boot_args="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1"
 ```
 
-Do not add `pmd0=`/`rd=md0` for this test. Let root-device discovery find the
-APFS system volume, or supply the `rd=` identifier appropriate to the image if
-your existing full-system boot requires it. First try a writable scratch copy;
-the loader falls back to read-only if `O_RDWR` fails and reports that explicitly.
+`scripts/run/boot.sh` forwards `BERINGIA_DISK` to the loader's `disk=` parameter. The recovery container was booted
+this way (replace the image with your own):
 
-The checked-in `scripts/run/boot.sh` currently forwards `BERINGIA_RAMDISK` but
-has no `BERINGIA_DISK` forwarding. It must gain a corresponding
-`disk=/lib/firmware/...` module argument (or the direct `insmod` form above must
-be used); merely setting `BERINGIA_DISK` with the unmodified script has no
-effect. That runner file was intentionally not changed here.
+```bash
+sudo env BERINGIA_NO_BUILD=1 \
+  BERINGIA_KERNEL="$BERINGIA_BUILD/kc/prelinkedkernel" \
+  BERINGIA_DISK=/absolute/path/to/x86_64SURamDisk.dmg \
+  BERINGIA_BOOT_ARGS="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1 rd=disk0" \
+  scripts/run/boot.sh 90
+sudo scripts/run/stop.sh
+```
+
+Do not add `pmd0=`/`rd=md0` for this test. Let root-device discovery find the APFS system volume, or supply the `rd=`
+identifier appropriate to the image. First try a writable scratch copy; the loader falls back to read-only if `O_RDWR`
+fails and reports that explicitly.
 
 Expected early evidence is the loader's `xnu: disk ... (block unit 0)` line and
 `BeringiaDisk: ... blocks of 512 bytes`, followed by IOBlockStorageDriver media,
@@ -175,7 +180,7 @@ GPT partition, and APFS messages.
 
 ## Validation status
 
-Validated without loading modules or booting XNU:
+Build-time validation:
 
 * the loader compiles successfully (its pre-existing `console_line` frame-size
   warning remains);
@@ -183,7 +188,15 @@ Validated without loading modules or booting XNU:
 * strict KPI binding reports zero unexported imports;
 * OpenCore prelinked-kernel injection succeeds with IOStorageFamily and APFS.
 
-Still untested on a live boot: host-call address handoff, physical bounce-buffer
-I/O, IOBlockStorageDriver matching/media creation, APFS mounting, read/write
-correctness, flush behavior, and read-only fallback. These require the main
-engineer's controlled boot test.
+Live-boot validation (`runs/20261127-011005` and `runs/20261127-012220`):
+
+* the host-call handoff and physical bounce-buffer reads work: `BeringiaDisk: 524288 blocks of 512 bytes (256 MiB),
+  writable` appears;
+* IOBlockStorageDriver publishes the boot media, `rd=disk0` selects it, and APFS reports `mount-complete` for the
+  recovery volume;
+* after the separate UMIP and property-table fixes, launchd starts ramrod and syslogd. Its later reboot is caused by
+  the missing target System volume, not by a disk failure.
+
+Still to validate: sustained write correctness, flush durability to stable storage (the current flush is not an
+`fsync`), and the read-only fallback. The M5 experiment log is
+[../../docs/research/m5-userspace-bringup.md](../../docs/research/m5-userspace-bringup.md).

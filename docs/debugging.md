@@ -22,6 +22,9 @@ running after the script returns. Settings (in `local.env` or the environment; s
 | Variable | Effect |
 |---|---|
 | `BERINGIA_BOOT_ARGS` | XNU boot-args. Passed quoted (`boot_args="..."`), so the kernel does not split them at spaces. |
+| `BERINGIA_KERNEL` | kernel/prelinked-kernel image to install and boot (default: the XNU build output). |
+| `BERINGIA_RAMDISK` | optional HFS+/APFS image loaded as memdev `pmd0`, with `rd=md0` appended. |
+| `BERINGIA_DISK` | optional raw host file exposed through BeringiaDisk as block unit 0. For the recovery container, add `rd=disk0` to `BERINGIA_BOOT_ARGS`. |
 | `BERINGIA_WIN_DIR` | e.g. `/mnt/c/Users/<you>/xnu-work`: per-run directories and the watchdog's marker live here. |
 | `BERINGIA_WATCH_MINUTES` | how long the watchdog stays armed for the run (default 60). |
 | `BERINGIA_FAILFAST` | default 1: `softlockup_panic`, `panic_on_rcu_stall` and an RCU stall timeout of `BERINGIA_STALL_SECS` (20). A wedged CPU then ends in a panic with backtraces on the console instead of a silent hang. |
@@ -32,6 +35,21 @@ It also sets `kernel.panic_on_oops=0` (an oops in a module thread does not reset
 
 `LINUX_KDIR` is the WSL2 kernel tree you built (`scripts/host/wsl-kernel.sh`). Paths are in `local.env` (git-ignored;
 absolute paths so they also work under sudo/root).
+
+A BeringiaDisk recovery boot looks like this (use your own image; do not add `ramdisk=` at the same time):
+
+```sh
+sudo env BERINGIA_NO_BUILD=1 \
+  BERINGIA_KERNEL="$BERINGIA_BUILD/kc/prelinkedkernel" \
+  BERINGIA_DISK=/absolute/path/to/x86_64SURamDisk.dmg \
+  BERINGIA_BOOT_ARGS="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1 rd=disk0" \
+  scripts/run/boot.sh 90
+sudo scripts/run/stop.sh
+```
+
+Expected evidence includes `BeringiaDisk: ... blocks of 512 bytes`, `Got boot device`, `BSD root: disk0`, and an
+APFS `mount-complete` line. The M5 experiment log and KC build commands are in
+[research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
 
 ## Where the console output goes
 
@@ -82,6 +100,17 @@ EOF
 Disassemble at an address with `llvm-objdump -d --start-address=0x... --stop-address=0x... $K` (same slide rule).
 **Note that adding debug code shifts symbol addresses** — re-run `nm` after each build rather than reusing an old map.
 
+## Userspace exceptions
+
+Hosted patch 0036 prints `BERINGIA: user exception ...` for `EXC_BAD_ACCESS`, `EXC_BAD_INSTRUCTION` and
+`EXC_ARITHMETIC`, including the two Mach code words. For example, launchd's post-ignition failure showed code
+`0xd 0`: `0xd` is #GP from userspace `sidt` with CR4.UMIP set, not a NULL-pointer memcpy. The world switch now
+clears UMIP on every foreign entry; Linux's CR4 is restored on exit.
+
+For a userspace crash, also record the RIP, the `uuid info` image map, and the exception code before disassembling
+the corresponding library. See [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md) for the worked
+example.
+
 ## Where is XNU stuck? The thread dump
 
 When XNU stops making progress without a panic (it idles with a far deadline), ask it for its threads:
@@ -108,6 +137,8 @@ backtraces.
 | `beringia_host.ko trace=PATH` | also append log lines to this file. |
 | `beringia_host.ko selftest=N selftest_cpus=M` | run the world-switch self-test (no XNU needed). |
 | `beringia_xnu.ko kernel=PATH` | the kernel Mach-O to load (default `/lib/firmware/beringia/kernel`). |
+| `beringia_xnu.ko ramdisk=PATH` | a memory-disk image for memdev (`pmd0` + `rd=md0`). |
+| `beringia_xnu.ko disk=PATH` | a raw host file used by BeringiaDisk (block unit 0); opened read/write when possible, otherwise read-only. |
 | `beringia_xnu.ko boot_args="..."` | XNU boot arguments. Default includes `-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1`. |
 | `beringia_xnu.ko linux_cpu=N` | which Linux CPU runs hosted CPU 0 (default 1). |
 
