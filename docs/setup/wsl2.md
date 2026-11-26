@@ -26,6 +26,7 @@ memory=24GB
 processors=20
 kernelCommandLine=memmap=3G$0x20000000 memmap=4G$0x400000000 nopti ibt=off nmi_watchdog=0
 debugConsole=true
+debugConsoleLogFile=C:\\Users\\<you>\\xnu-work\\logs\\wsl-console.log
 ```
 
 - `memmap=SIZE$BASE` hides physical RAM from Linux; Beringia gives it to XNU. The first range must be below 4 GiB
@@ -37,6 +38,8 @@ debugConsole=true
 - `ibt=off`: no indirect-branch tracking in Linux's kernel; XNU's code has no ENDBR landing pads.
 - `nmi_watchdog=0`: no perf NMIs while XNU runs.
 - `debugConsole=true`: a Windows console window with the guest's kernel log, which survives a guest crash.
+- `debugConsoleLogFile=...`: the same console, written to a file by Windows (WSL 2.x/3.x; the directory must exist).
+  It is the record that survives a wedged or reset guest, and it is appended across VM restarts.
 
 Restart WSL (`wsl --shutdown`) and check:
 
@@ -48,8 +51,10 @@ sudo grep -v '^ ' /proc/iomem      # the reserved ranges are no longer System RA
 ## 3. Crash handling
 
 - `sudo sysctl -w kernel.panic_on_oops=0`: WSL sets `panic_on_oops=1` and `panic=-1`, which turns any bug into an
-  instant VM reset with the log lost.
-- `scripts/run/boot.sh` writes host and XNU traces synchronously to a file on the Windows drive (`/mnt/c/...`), so the
-  last lines survive a hard crash.
+  instant VM reset (`boot.sh` does this).
+- `scripts/run/boot.sh` turns RCU stalls and soft lockups into panics (`BERINGIA_FAILFAST`), so a wedged CPU produces
+  backtraces in the host-side console log and a VM reset instead of a silent hang.
+- `scripts/run/wsl-watchdog.ps1` (installed with `scripts/run/install-watchdog.ps1`) watches armed runs, keeps their
+  evidence and force-stops a hung VM; see [../debugging.md](../debugging.md).
 - If the VM stops responding: `wsl --shutdown --force` (plain `--shutdown` waits for the instance and can block
   forever). `scripts/run/wsl-recover.sh` does this from inside a working shell.
