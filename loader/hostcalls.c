@@ -14,7 +14,12 @@ static unsigned long fwd_count, tmr_count;
 
 static void ldr_timer_fire(int cpu)
 {
-	ldr.shared->cpu[cpu].pending |= BERINGIA_PENDING_TIMER;
+	static unsigned long fire_count;
+
+	/* atomic: XNU takes the word with __atomic_fetch_and, other CPUs set IPI bits concurrently */
+	__atomic_fetch_or(&ldr.shared->cpu[cpu].pending, BERINGIA_PENDING_TIMER, __ATOMIC_SEQ_CST);
+	if (++fire_count <= 10)
+		bh_logf("xnu: host timer fire %lu cpu %d", fire_count, cpu);
 }
 
 static char console_buf[BERINGIA_MAX_CPUS][sizeof(((struct beringia_cpu_shared *)0)->console) + 1];
@@ -65,15 +70,20 @@ long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 	case BERINGIA_CALL_SET_TIMER:
 		tmr_count++;
 		if (tmr_count <= 5 || tmr_count % 100 == 0)
-			bh_logf("xnu: set_timer %lu (deadline %#llx)", tmr_count, a1);
+			bh_logf("xnu: set_timer %lu (deadline %#lx)", tmr_count, a1);
 		ldr.shared->cpu[cpu].timer_deadline = a1;
 		bh_timer_set(cpu, a1, ldr_timer_fire);
 		return 0;
-	case BERINGIA_CALL_IDLE:
-		bh_logf("xnu: idle enter (a1=%#lx)", a1);
+	case BERINGIA_CALL_IDLE: {
+		static unsigned long idle_count;
+
+		if (++idle_count <= 10 || idle_count % 1000 == 0)
+			bh_logf("xnu: idle %lu (deadline %#lx, pending %#x)", idle_count, a1, ldr.shared->cpu[cpu].pending);
 		bh_idle(cpu, a1, &ldr.shared->cpu[cpu].pending);
-		bh_logf("xnu: idle exit");
+		if (idle_count <= 10)
+			bh_logf("xnu: idle return %lu (pending %#x)", idle_count, ldr.shared->cpu[cpu].pending);
 		return bh_stop_requested(cpu) ? BH_ABORT : 0;
+	}
 	case BERINGIA_CALL_IPI:
 		if (a1 < BERINGIA_MAX_CPUS)
 			bh_kick(a1);

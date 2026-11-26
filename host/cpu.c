@@ -142,10 +142,8 @@ void bh_idle(int cpu, bh_u64 tsc_deadline, const volatile unsigned int *wake)
 			t = ns_to_ktime(tsc_to_ns(tsc_deadline - now));
 			schedule_hrtimeout_range(&t, 20000, HRTIMER_MODE_REL);
 		} else if (!tsc_deadline) {
-			t = ns_to_ktime(tsc_to_ns(tsc_khz * 4000));
-			bh_logf("bh_idle: before timeout");
+			t = ns_to_ktime(tsc_to_ns(tsc_khz * 4ULL));	/* tsc_khz cycles = 1 ms */
 			schedule_hrtimeout_range(&t, 20000, HRTIMER_MODE_REL);
-			bh_logf("bh_idle: after timeout");
 			break;	/* bounded wait elapsed: return to the foreign kernel */
 		} else {
 			break;	/* deadline passed */

@@ -24,6 +24,24 @@ module_param(linux_cpu, int, 0444);
 
 struct ldr ldr;
 
+/* Bring-up: `echo 1 > /sys/module/beringia_xnu/parameters/dump` makes every hosted CPU print its threads. */
+static int dump_set(const char *val, const struct kernel_param *kp)
+{
+	int i;
+
+	if (!ldr.shared)
+		return -ENODEV;
+	for (i = 0; i < ldr.ncpus; i++) {
+		__atomic_fetch_or(&ldr.shared->cpu[i].pending, BERINGIA_PENDING_DUMP, __ATOMIC_SEQ_CST);
+		bh_kick(i);
+	}
+	return 0;
+}
+
+static const struct kernel_param_ops dump_ops = { .set = dump_set };
+module_param_cb(dump, &dump_ops, NULL, 0200);
+MODULE_PARM_DESC(dump, "write anything: the hosted XNU prints every thread's state and backtrace");
+
 static int find_low_range(void)
 {
 	int i;
