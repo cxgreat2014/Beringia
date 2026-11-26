@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 13:57:49 +0800
+Subject: [PATCH 25/25] hosted: route LAPIC periodic timer to host; bounded
+ host idle; timer-delivery diagnostics
+
+---
+ osfmk/i386/lapic_native.c | 5 +++++
+ osfmk/i386/pmCPU.c        | 3 +++
+ osfmk/i386/rtclock.c      | 7 +++++++
+ 3 files changed, 15 insertions(+)
+
+diff --git a/osfmk/i386/lapic_native.c b/osfmk/i386/lapic_native.c
+index 0e9b297..082d246 100644
+--- a/osfmk/i386/lapic_native.c
++++ b/osfmk/i386/lapic_native.c
+@@ -824,6 +824,11 @@ lapic_set_timer_fast(
+ void
+ lapic_set_tsc_deadline_timer(uint64_t deadline)
+ {
++	static unsigned int sc;
++
++	if (sc++ < 6) {
++		kprintf("BERINGIA: lapic_set_tsc_deadline deadline=%llu hook=%llx\n", deadline, (unsigned long long)beringia_hook);
++	}
+ 	/* BERINGIA: the host owns the real TSC-deadline MSR; arm its timer, which marks this CPU pending and kicks it. */
+ 	if (beringia_hosted()) {
+ 		beringia_call(BERINGIA_CALL_SET_TIMER, deadline, 0);
+diff --git a/osfmk/i386/pmCPU.c b/osfmk/i386/pmCPU.c
+index af5069a..ef95350 100644
+--- a/osfmk/i386/pmCPU.c
++++ b/osfmk/i386/pmCPU.c
+@@ -187,6 +187,9 @@ machine_idle(void)
+ 			 * it armed for us fires or another CPU kicks us; the pending timer/IPI is delivered by the forwarded
+ 			 * interrupt path. hlt would park this CPU with nothing to wake it (the LAPIC is the host one). */
+ 			beringia_call(BERINGIA_CALL_IDLE, 0, (unsigned long)&beringia_shared.cpu[beringia_cpu()].pending);
++			if (n < 5) {
++				kprintf("BERINGIA: idle returned %u\n", n);
++			}
+ 		} else {
+ 			pal_hlt();
+ 			/* Once woken, re-disable interrupts. */
+diff --git a/osfmk/i386/rtclock.c b/osfmk/i386/rtclock.c
+index 235db63..b049a53 100644
+--- a/osfmk/i386/rtclock.c
++++ b/osfmk/i386/rtclock.c
+@@ -485,6 +485,13 @@ setPop(uint64_t time)
+ 		pop = rtc_timer->rtc_set(time, now);
+ 	}
+ 
++	if (beringia_hosted()) {
++		static unsigned int spc;
++
++		if (spc++ < 8) {
++			kprintf("BERINGIA: setPop time=%llu rtc_set=%p\n", time, rtc_timer->rtc_set);
++		}
++	}
+ 	/* Record requested and actual deadlines set */
+ 	x86_lcpu()->rtcDeadline = time;
+ 	x86_lcpu()->rtcPop      = pop;

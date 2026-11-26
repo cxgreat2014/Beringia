@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 13:07:47 +0800
+Subject: [PATCH 24/25] hosted: route the LAPIC periodic timer to the host too;
+ bounded host idle wait
+
+---
+ osfmk/i386/rtclock_native.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/osfmk/i386/rtclock_native.c b/osfmk/i386/rtclock_native.c
+index baaa904..f15794c 100644
+--- a/osfmk/i386/rtclock_native.c
++++ b/osfmk/i386/rtclock_native.c
+@@ -30,6 +30,7 @@
+  */
+ 
+ 
++#include <beringia_hosted.h>
+ #include <mach/mach_types.h>
+ 
+ #include <architecture/i386/pio.h>
+@@ -83,6 +84,19 @@ rtc_lapic_set_timer(uint64_t deadline, uint64_t now)
+ 	uint64_t count;
+ 	uint64_t set = 0;
+ 
++	/* BERINGIA: the LAPIC periodic timer is the host's; arm the host's one-shot timer at the same deadline. */
++	if (beringia_hosted()) {
++		uint64_t tsc = rdtsc64(), dead_tsc = 0;
++
++		if (deadline > 0) {
++			count = deadline_to_decrementer(deadline, now);
++			set = now + count;
++			dead_tsc = tsc + tmrCvt(count, tscFCvtn2t);
++		}
++		beringia_call(BERINGIA_CALL_SET_TIMER, dead_tsc, 0);
++		return set;
++	}
++
+ 	if (deadline > 0) {
+ 		/*
+ 		 * Convert delta to bus ticks

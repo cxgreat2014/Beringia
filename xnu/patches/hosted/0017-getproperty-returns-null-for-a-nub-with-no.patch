@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 12:01:33 +0800
-Subject: [PATCH 20/22] hosted: getProperty returns NULL for a nub with no
+Subject: [PATCH 20/25] hosted: getProperty returns NULL for a nub with no
  property table
 
 ---

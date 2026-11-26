@@ -10,6 +10,8 @@
 
 #define BH_HC_TRAP 0xfff0	/* the host's initial IDT: an exception before XNU's own IDT was loaded */
 
+static unsigned long fwd_count, tmr_count;
+
 static void ldr_timer_fire(int cpu)
 {
 	ldr.shared->cpu[cpu].pending |= BERINGIA_PENDING_TIMER;
@@ -34,6 +36,11 @@ static void console_line(int cpu, unsigned long len, const char *prefix)
 
 long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 {
+	static unsigned long hc_count;
+
+	hc_count++;
+	if (hc_count <= 40)
+		bh_logf("xnu: hc %lu nr=%#lx", hc_count, nr);
 	switch (nr) {
 	case BERINGIA_CALL_CONSOLE:
 		if (a1 < BERINGIA_MAX_CPUS)
@@ -50,14 +57,22 @@ long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 		bh_logf("xnu: mark %lu %#lx", a1, a2);
 		return 0;
 	case BERINGIA_CALL_FORWARD_IRQ:
+		fwd_count++;
+		if (fwd_count % 100 == 0 || fwd_count <= 5)
+			bh_logf("xnu: forwarded %lu irqs (vec %lu)", fwd_count, a1);
 		bh_reinject_irq(a1);
 		return bh_stop_requested(cpu) ? BH_ABORT : 0;
 	case BERINGIA_CALL_SET_TIMER:
+		tmr_count++;
+		if (tmr_count <= 5 || tmr_count % 100 == 0)
+			bh_logf("xnu: set_timer %lu (deadline %#llx)", tmr_count, a1);
 		ldr.shared->cpu[cpu].timer_deadline = a1;
 		bh_timer_set(cpu, a1, ldr_timer_fire);
 		return 0;
 	case BERINGIA_CALL_IDLE:
+		bh_logf("xnu: idle enter (a1=%#lx)", a1);
 		bh_idle(cpu, a1, &ldr.shared->cpu[cpu].pending);
+		bh_logf("xnu: idle exit");
 		return bh_stop_requested(cpu) ? BH_ABORT : 0;
 	case BERINGIA_CALL_IPI:
 		if (a1 < BERINGIA_MAX_CPUS)

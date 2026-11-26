@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 12:01:33 +0800
-Subject: [PATCH 21/22] hosted: rtclock heartbeat (debug)
+Subject: [PATCH 21/25] hosted: rtclock heartbeat (debug)
 
 ---
  osfmk/i386/rtclock.c | 12 ++++++++++++

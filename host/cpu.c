@@ -133,11 +133,22 @@ void bh_idle(int cpu, bh_u64 tsc_deadline, const volatile unsigned int *wake)
 		set_current_state(TASK_INTERRUPTIBLE);
 		if (READ_ONCE(c->kicked) || READ_ONCE(c->stop) || (wake && *wake) || (tsc_deadline && now >= tsc_deadline))
 			break;
-		if (tsc_deadline) {
+		/*
+		 * Bounded wait: never park this CPU indefinitely. The foreign kernel idles through us and, especially
+		 * before its timer is wired up, nothing would kick it — it would stall here with interrupts off.
+		 * Wake within ~4 ms so it can make progress and check for pending work.
+		 */
+		if (tsc_deadline && now < tsc_deadline) {
 			t = ns_to_ktime(tsc_to_ns(tsc_deadline - now));
 			schedule_hrtimeout_range(&t, 20000, HRTIMER_MODE_REL);
+		} else if (!tsc_deadline) {
+			t = ns_to_ktime(tsc_to_ns(tsc_khz * 4000));
+			bh_logf("bh_idle: before timeout");
+			schedule_hrtimeout_range(&t, 20000, HRTIMER_MODE_REL);
+			bh_logf("bh_idle: after timeout");
+			break;	/* bounded wait elapsed: return to the foreign kernel */
 		} else {
-			schedule();
+			break;	/* deadline passed */
 		}
 	}
 	__set_current_state(TASK_RUNNING);

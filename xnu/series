@@ -21,3 +21,6 @@ hosted/0016-make-iodtnvram-a-stub-no-nvram-on-the-hosted.patch
 hosted/0017-getproperty-returns-null-for-a-nub-with-no.patch
 hosted/0018-rtclock-heartbeat-debug.patch
 hosted/0019-interrupt-delivery-debug-debug.patch
+hosted/0020-debug-if-and-idtr-at-idle-debug.patch
+hosted/0021-route-the-lapic-periodic-timer-to-the-host-too.patch
+hosted/0022-route-lapic-periodic-timer-to-host-bounded.patch

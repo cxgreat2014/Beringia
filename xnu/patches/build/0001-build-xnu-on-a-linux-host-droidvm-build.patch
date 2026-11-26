@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 02:22:43 +0800
-Subject: [PATCH 01/22] build: build XNU on a Linux host (DroidVM build
+Subject: [PATCH 01/25] build: build XNU on a Linux host (DroidVM build
  support)
 
 ---
