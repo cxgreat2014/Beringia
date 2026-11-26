@@ -9,6 +9,8 @@
 | [cctools-port](https://github.com/tpoechtrager/cctools-port), bootstrap_cmds (MIG) | APSL-2.0 | Mach-O linker and tools, MIG |
 | LLVM | Apache-2.0 WITH LLVM-exception | Compiler |
 | Linux (microsoft/WSL2-Linux-Kernel) | GPL-2.0 | The host kernel |
+| [OpenCorePkg](https://github.com/acidanthera/OpenCorePkg) | BSD-3-Clause | OcAppleKernelLib links Apple's kexts into the prelinked kernel (`tools/kc`); `tools/kc/kcinject.c` is derived from its `Utilities/TestKextInject` (Copyright (C) 2018, vit9696) |
+| [audk](https://github.com/acidanthera/audk) (acidanthera's EDK2) | BSD-2-Clause-Patent | Headers OpenCorePkg's userspace build needs |
 
 ## Reference project
 

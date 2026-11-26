@@ -25,7 +25,7 @@ if [ "${BERINGIA_NO_BUILD:-0}" != 1 ]; then
 	make -s -C "$BERINGIA_ROOT/host" KDIR="$LINUX_KDIR"
 	make -s -C "$BERINGIA_ROOT/loader" KDIR="$LINUX_KDIR"
 fi
-img=$BERINGIA_BUILD/xnu/obj/DEVELOPMENT_X86_64/kernel.development.unstripped
+img=${BERINGIA_KERNEL:-$BERINGIA_BUILD/xnu/obj/DEVELOPMENT_X86_64/kernel.development.unstripped}
 [ -f "$img" ] || die "no $img (scripts/xnu/build.sh)"
 mkdir -p /lib/firmware/beringia
 install -m 0644 "$img" /lib/firmware/beringia/kernel
