@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 00:11:23 +0800
+Subject: [PATCH] hosted: unblock hw.osenvironment when there is no NVRAM
+ controller
+
+On Intel (DEVELOPMENT/DEBUG), sysctl hw.osenvironment waits until
+sysctl_unblock_osenvironment() runs, which normally happens in
+IOPlatformExpert::registerNVRAMController. BeringiaPlatform publishes
+IONVRAM directly (IODTNVRAM is a stub), so it never ran: launchd blocked
+forever on its first hw.osenvironment sysctl, right after the ignition
+banner (thread dump: _sysctl_osenvironment on osenvironment_initialized).
+Call it in BeringiaPlatform::start. With this, launchd completes the
+ignition sequence.
+---
+ iokit/Kernel/BeringiaPlatform.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/iokit/Kernel/BeringiaPlatform.cpp b/iokit/Kernel/BeringiaPlatform.cpp
+index e871467..d560cdf 100644
+--- a/iokit/Kernel/BeringiaPlatform.cpp
++++ b/iokit/Kernel/BeringiaPlatform.cpp
+@@ -38,6 +38,7 @@
+  */
+ #include <IOKit/IOPlatformExpert.h>
+ #include <machine/machine_routines.h>
++extern "C" void sysctl_unblock_osenvironment(void);
+ extern "C" {
+ #include <beringia_hosted.h>
+ }
+@@ -74,6 +75,9 @@ public:
+ 		 */
+ 		publishResource("IORTC", this);
+ 		publishResource("IONVRAM");
++		/* registerNVRAMController also unblocks hw.osenvironment (on Intel, in DEVELOPMENT builds): launchd's
++		 * first sysctl of it waits for that. With no NVRAM controller, the platform must do it itself. */
++		sysctl_unblock_osenvironment();
+ 		return true;
+ 	}
+ 

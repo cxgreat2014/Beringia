@@ -36,3 +36,4 @@ hosted/0031-hash-kernel-addresses-without-corecrypto-until-i.patch
 hosted/0032-treat-a-null-registry-property-name-as-absent.patch
 hosted/0033-enable-memdev-pmd0-boot-arguments-for-a-ram-disk.patch
 hosted/0034-tolerate-missing-amfi-and-block-storage-classes-.patch
+hosted/0035-unblock-hw-osenvironment-when-there-is-no-nvram-.patch
