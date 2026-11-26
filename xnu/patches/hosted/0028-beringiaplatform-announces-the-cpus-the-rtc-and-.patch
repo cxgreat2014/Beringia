@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:16 +0800
+Subject: [PATCH] hosted: BeringiaPlatform announces the CPUs, the RTC and
+ NVRAM
+
+Without an ACPI platform nobody calls ml_set_max_cpus(), and
+vm_commpage_init (ml_wait_max_cpus) blocked kernel_bootstrap_thread forever.
+IOKitInitializeTime then waits 30 s each for the IORTC and IONVRAM
+resources.
+
+BeringiaPlatform::start announces the host's CPU count and publishes IORTC
+(the time of day is the host's wall clock, BERINGIA_CALL_WALLCLOCK) and
+IONVRAM (IODTNVRAM is a stub on the hosted platform).
+---
+ EXTERNAL_HEADERS/beringia_hosted.h |  2 ++
+ iokit/Kernel/BeringiaPlatform.cpp  | 53 ++++++++++++++++++++++++++++++
+ osfmk/x86_64/beringia.c            | 11 +++++++
+ 3 files changed, 66 insertions(+)
+
+diff --git a/EXTERNAL_HEADERS/beringia_hosted.h b/EXTERNAL_HEADERS/beringia_hosted.h
+index 6b12620..cd6f7ce 100644
+--- a/EXTERNAL_HEADERS/beringia_hosted.h
++++ b/EXTERNAL_HEADERS/beringia_hosted.h
+@@ -63,6 +63,8 @@ long beringia_call(unsigned long nr, unsigned long a1, unsigned long a2);
+ void beringia_console_putc(char c);
+ void beringia_console_write(const char *s, unsigned long len);
+ void beringia_random(void *out, unsigned long len);
++/* The host's wall clock (UTC). */
++void beringia_wallclock(uint64_t *sec, uint64_t *nsec);
+ void beringia_panic(const char *msg) __attribute__((noreturn));
+ /* Bring-up: every thread's state, wait event and kernel backtrace on the host console (interrupt context). */
+ void beringia_dump_threads(void);
+diff --git a/iokit/Kernel/BeringiaPlatform.cpp b/iokit/Kernel/BeringiaPlatform.cpp
+index faff8f4..e871467 100644
+--- a/iokit/Kernel/BeringiaPlatform.cpp
++++ b/iokit/Kernel/BeringiaPlatform.cpp
+@@ -37,6 +37,10 @@
+  * IOPanicPlatform, so IOKit picks it instead of panicking with "Unable to find driver for this platform".
+  */
+ #include <IOKit/IOPlatformExpert.h>
++#include <machine/machine_routines.h>
++extern "C" {
++#include <beringia_hosted.h>
++}
+ 
+ class BeringiaPlatform : public IODTPlatformExpert
+ {
+@@ -51,6 +55,55 @@ public:
+ 	virtual const char * deleteList( void ) APPLE_KEXT_OVERRIDE { return ""; }
+ 	virtual const char * excludeList( void ) APPLE_KEXT_OVERRIDE { return ""; }
+ 
++	/*
++	 * The number of CPUs normally reaches the kernel from the CPU interrupt controller the ACPI platform sets up
++	 * (IOCPUInterruptController::initCPUInterruptController -> ml_set_max_cpus). Until Beringia has its own IOCPU
++	 * drivers, the platform expert announces the host's count itself: without it, vm_commpage_init (through
++	 * ml_wait_max_cpus) blocks the bootstrap thread forever.
++	 */
++	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE
++	{
++		if (!IODTPlatformExpert::start(provider)) {
++			return false;
++		}
++		ml_set_max_cpus(beringia_shared.ncpus ? beringia_shared.ncpus : 1);
++		/*
++		 * IOKitInitializeTime waits (30 s each) for an RTC and for NVRAM. The time of day is the host's
++		 * (getUTCTimeOfDay below), so the platform is the RTC. There is no NVRAM (IODTNVRAM is a stub): announce
++		 * it as ready, as IOPlatformExpert::registerNVRAMController does once a real controller has registered.
++		 */
++		publishResource("IORTC", this);
++		publishResource("IONVRAM");
++		return true;
++	}
++
++	/* The time of day comes from the host; setting it is the host's business (WSL keeps it in sync). */
++	virtual void getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs) APPLE_KEXT_OVERRIDE
++	{
++		uint64_t s, ns;
++
++		beringia_wallclock(&s, &ns);
++		*secs = (clock_sec_t)s;
++		*nsecs = (clock_nsec_t)ns;
++	}
++	virtual void setUTCTimeOfDay(clock_sec_t secs, clock_nsec_t nsecs) APPLE_KEXT_OVERRIDE
++	{
++		(void)secs;
++		(void)nsecs;
++	}
++	virtual long getGMTTimeOfDay(void) APPLE_KEXT_OVERRIDE
++	{
++		clock_sec_t s;
++		clock_nsec_t ns;
++
++		getUTCTimeOfDay(&s, &ns);
++		return (long)s;
++	}
++	virtual void setGMTTimeOfDay(long secs) APPLE_KEXT_OVERRIDE
++	{
++		(void)secs;
++	}
++
+ 	/* There is no NVRAM on the hosted platform, and saving the panic log to it would wedge the machine; the host
+ 	 * already captures the whole console (including the backtrace) synchronously to a file on the Windows side. */
+ 	virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length) APPLE_KEXT_OVERRIDE
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+index 4100140..ce9b227 100644
+--- a/osfmk/x86_64/beringia.c
++++ b/osfmk/x86_64/beringia.c
+@@ -117,6 +117,7 @@ beringia_panic(const char *msg)
+  * address is (VA - KERNEL_BASE).
+  */
+ static uint8_t beringia_rng_bounce[256] __attribute__((aligned(64)));
++static uint64_t beringia_clock_bounce[2] __attribute__((aligned(16)));
+ 
+ void
+ beringia_random(void *out, unsigned long len)
+@@ -134,6 +135,16 @@ beringia_random(void *out, unsigned long len)
+ 	}
+ }
+ 
++void
++beringia_wallclock(uint64_t *sec, uint64_t *nsec)
++{
++	uint64_t pa = (uint64_t)(uintptr_t)beringia_clock_bounce - 0xffffff8000000000ULL;
++
++	beringia_call(BERINGIA_CALL_WALLCLOCK, pa, 0);
++	*sec = beringia_clock_bounce[0];
++	*nsec = beringia_clock_bounce[1];
++}
++
+ /*
+  * Bring-up: the host sets BERINGIA_PENDING_DUMP (beringia_xnu.ko parameter "dump") and this prints every thread: id,
+  * name, state, priority, block hint, wait event and continuation, and a frame-pointer backtrace from its saved kernel

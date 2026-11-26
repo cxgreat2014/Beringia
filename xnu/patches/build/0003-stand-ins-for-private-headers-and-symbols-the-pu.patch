@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 02:22:43 +0800
-Subject: [PATCH 03/25] build: stand-ins for private headers and symbols the
- public tree lacks
+Subject: [PATCH] build: stand-ins for private headers and symbols the public
+ tree lacks
 
 ---
  EXTERNAL_HEADERS/AppleFeatures.h              |  5 +++++

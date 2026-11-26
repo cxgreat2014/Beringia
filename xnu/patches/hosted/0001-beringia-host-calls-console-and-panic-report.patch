@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 03:01:40 +0800
-Subject: [PATCH 04/25] hosted: Beringia host calls, console and panic report
+Subject: [PATCH] hosted: Beringia host calls, console and panic report
 
 beringia_hook (set by the loader) marks a hosted kernel; beringia_call() is
 the host-call entry. The serial driver becomes the host console when hosted

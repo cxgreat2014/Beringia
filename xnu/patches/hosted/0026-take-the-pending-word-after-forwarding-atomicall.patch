@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:15 +0800
+Subject: [PATCH] hosted: take the pending word after forwarding, atomically
+
+interrupt() read the pending word before forwarding the vector to the host,
+but the forwarded interrupt is usually the host timer whose handler sets
+PENDING_TIMER, so that timer was only seen at the next interrupt. Take the
+word after forwarding, with an atomic fetch-and-clear (other CPUs set
+PENDING_IPI concurrently).
+---
+ osfmk/i386/trap.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index b41cbb8..838f5c7 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -383,13 +383,19 @@ interrupt(x86_saved_state_t *state)
+ 	 * lapic_timer_swi for exactly this), so they must NOT be forwarded to Linux; they directly request the handler.
+ 	 */
+ 	if (beringia_hosted()) {
+-		unsigned int pending = beringia_shared.cpu[beringia_cpu()].pending;
++		unsigned int pending;
+ 		boolean_t xnu_timer = interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT);
+ 		boolean_t xnu_ipi = interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_INTERPROCESSOR_INTERRUPT);
+ 
+ 		if (!xnu_timer && !xnu_ipi) {
+ 			beringia_call(BERINGIA_CALL_FORWARD_IRQ, interrupt_num, 0);
+ 		}
++		/*
++		 * Taken after forwarding: the forwarded interrupt is usually the host timer whose handler sets
++		 * PENDING_TIMER. Atomically, because other CPUs set PENDING_IPI concurrently.
++		 */
++		pending = __atomic_fetch_and(&beringia_shared.cpu[beringia_cpu()].pending,
++		    ~(BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI), __ATOMIC_SEQ_CST);
+ 		if (xnu_timer) {
+ 			pending |= BERINGIA_PENDING_TIMER;
+ 		}
+@@ -397,11 +403,9 @@ interrupt(x86_saved_state_t *state)
+ 			pending |= BERINGIA_PENDING_IPI;
+ 		}
+ 		if (pending & BERINGIA_PENDING_TIMER) {
+-			beringia_shared.cpu[beringia_cpu()].pending &= ~BERINGIA_PENDING_TIMER;
+ 			rtclock_intr(state);
+ 		}
+ 		if (pending & BERINGIA_PENDING_IPI) {
+-			beringia_shared.cpu[beringia_cpu()].pending &= ~BERINGIA_PENDING_IPI;
+ 			cpu_signal_handler(state);
+ 		}
+ 		return;

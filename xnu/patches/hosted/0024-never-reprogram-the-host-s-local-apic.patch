@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:15 +0800
+Subject: [PATCH] hosted: never reprogram the host's local APIC
+
+The hosted LAPIC is a RAM page with the legacy (xAPIC) ops, so is_x2apic is
+FALSE. lapic_configure() -> lapic_reinit() then read the real IA32_APIC_BASE,
+found the host's x2APIC mode, and called LAPIC_INIT() = legacy_init(), which
+disables the real local APIC and re-enables it in xAPIC mode. The host CPU
+lost its APIC configuration and never received another interrupt: the first
+time XNU idled on the host, that CPU stopped answering IPIs and timers and
+the whole WSL VM wedged (RCU stall in smp_call_function_many_cond).
+
+Hosted, the LAPIC ops have a no-op init, and lapic_reinit, lapic_probe and
+lapic_shutdown never touch IA32_APIC_BASE.
+---
+ osfmk/i386/lapic_native.c | 34 +++++++++++++++++++++++++++++++---
+ 1 file changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/osfmk/i386/lapic_native.c b/osfmk/i386/lapic_native.c
+index 082d246..dbe0416 100644
+--- a/osfmk/i386/lapic_native.c
++++ b/osfmk/i386/lapic_native.c
+@@ -205,6 +205,24 @@ static lapic_ops_table_t legacy_ops = {
+ 	legacy_write_icr
+ };
+ 
++/*
++ * BERINGIA: the hosted LAPIC is a RAM page (lapic_init). Its ops must never reach the real local APIC, which is
++ * the host's: no init (legacy_init rewrites IA32_APIC_BASE, which takes the host's x2APIC out of x2APIC mode and
++ * leaves that CPU deaf to every interrupt), and register accesses go to the page.
++ */
++static void
++beringia_lapic_init(void)
++{
++}
++
++static lapic_ops_table_t beringia_lapic_ops = {
++	beringia_lapic_init,
++	legacy_read,
++	legacy_write,
++	legacy_read_icr,
++	legacy_write_icr
++};
++
+ boolean_t is_x2apic = FALSE;
+ 
+ static void
+@@ -305,6 +323,11 @@ lapic_reinit(bool for_wake)
+ 	boolean_t       is_lapic_enabled;
+ 	boolean_t       is_local_x2apic;
+ 
++	/* BERINGIA: the real local APIC and its mode are the host's; the hosted page needs no reinitialization. */
++	if (beringia_hosted()) {
++		return;
++	}
++
+ 	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+ 	is_boot_processor = (lo & MSR_IA32_APIC_BASE_BSP) != 0;
+ 	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
+@@ -385,7 +408,7 @@ lapic_init(void)
+ 	 */
+ 	if (beringia_hosted()) {
+ 		is_x2apic = FALSE;
+-		lapic_ops = &legacy_ops;
++		lapic_ops = &beringia_lapic_ops;
+ 		kmem_alloc(kernel_map, &lapic_vbase, round_page(LAPIC_SIZE),
+ 		    KMA_PERMANENT | KMA_NOFAIL | KMA_ZERO | KMA_KOBJECT, VM_KERN_MEMORY_IOKIT);
+ 		*LAPIC_MMIO(VERSION) = 0x14;                    /* the native path wants >= 0x14 */
+@@ -600,6 +623,11 @@ lapic_probe(void)
+ 	uint32_t        lo;
+ 	uint32_t        hi;
+ 
++	/* BERINGIA: there is always a (hosted) LAPIC; never enable the real one. */
++	if (beringia_hosted()) {
++		return TRUE;
++	}
++
+ 	if (cpuid_features() & CPUID_FEATURE_APIC) {
+ 		return TRUE;
+ 	}
+@@ -646,8 +674,8 @@ lapic_shutdown(bool for_sleep)
+ 		apic_mode_before_sleep = (is_x2apic ? APIC_MODE_X2APIC : APIC_MODE_XAPIC);
+ 	}
+ 
+-	/* Shutdown if local APIC was enabled by OS */
+-	if (lapic_os_enabled == FALSE) {
++	/* Shutdown if local APIC was enabled by OS (BERINGIA: never the host's) */
++	if (lapic_os_enabled == FALSE || beringia_hosted()) {
+ 		return;
+ 	}
+ 

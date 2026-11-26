@@ -1,0 +1,170 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:15 +0800
+Subject: [PATCH] hosted: host-requested thread dump (bring-up)
+
+BERINGIA_PENDING_DUMP (set by the host: beringia_xnu.ko parameter "dump")
+makes interrupt() print every thread with its state, priority, wait event,
+continuation and a frame-pointer backtrace from its saved kernel state, on
+the host console. machine_idle delivers it, like the timer and IPIs, through
+the timer software interrupt. Symbolize with tools/debug/symbolize.py.
+---
+ EXTERNAL_HEADERS/beringia/abi.h    |  1 +
+ EXTERNAL_HEADERS/beringia_hosted.h |  2 +
+ osfmk/i386/pmCPU.c                 |  5 +-
+ osfmk/i386/trap.c                  |  5 +-
+ osfmk/x86_64/beringia.c            | 74 ++++++++++++++++++++++++++++++
+ 5 files changed, 84 insertions(+), 3 deletions(-)
+
+diff --git a/EXTERNAL_HEADERS/beringia/abi.h b/EXTERNAL_HEADERS/beringia/abi.h
+index 8d66842..79ac5c2 100644
+--- a/EXTERNAL_HEADERS/beringia/abi.h
++++ b/EXTERNAL_HEADERS/beringia/abi.h
+@@ -50,6 +50,7 @@ enum beringia_call {
+ #define BERINGIA_PENDING_TIMER  (1u << 0)   /* the CPU's timer deadline passed */
+ #define BERINGIA_PENDING_IPI    (1u << 1)   /* another XNU CPU signalled this one */
+ #define BERINGIA_PENDING_STOP   (1u << 2)   /* the host is ending the run */
++#define BERINGIA_PENDING_DUMP   (1u << 3)   /* bring-up: print every thread's state and backtrace */
+ 
+ struct beringia_cpu_shared {
+ 	volatile unsigned int pending;      /* BERINGIA_PENDING_* */
+diff --git a/EXTERNAL_HEADERS/beringia_hosted.h b/EXTERNAL_HEADERS/beringia_hosted.h
+index d102bf0..6b12620 100644
+--- a/EXTERNAL_HEADERS/beringia_hosted.h
++++ b/EXTERNAL_HEADERS/beringia_hosted.h
+@@ -64,5 +64,7 @@ void beringia_console_putc(char c);
+ void beringia_console_write(const char *s, unsigned long len);
+ void beringia_random(void *out, unsigned long len);
+ void beringia_panic(const char *msg) __attribute__((noreturn));
++/* Bring-up: every thread's state, wait event and kernel backtrace on the host console (interrupt context). */
++void beringia_dump_threads(void);
+ 
+ #endif /* _BERINGIA_HOSTED_H_ */
+diff --git a/osfmk/i386/pmCPU.c b/osfmk/i386/pmCPU.c
+index f767f55..3a985a8 100644
+--- a/osfmk/i386/pmCPU.c
++++ b/osfmk/i386/pmCPU.c
+@@ -186,8 +186,9 @@ machine_idle(void)
+ 			uint64_t deadline = beringia_shared.cpu[cpu].timer_deadline;
+ 
+ 			beringia_call(BERINGIA_CALL_IDLE, deadline, (unsigned long)&beringia_shared.cpu[cpu].pending);
+-			if (beringia_shared.cpu[cpu].pending & BERINGIA_PENDING_TIMER) {
+-				lapic_timer_swi();
++			if (beringia_shared.cpu[cpu].pending &
++			    (BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI | BERINGIA_PENDING_DUMP)) {
++				lapic_timer_swi();       /* interrupt() takes every pending bit */
+ 			}
+ 		} else {
+ 			pal_hlt();
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index 838f5c7..a8852d8 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -395,7 +395,7 @@ interrupt(x86_saved_state_t *state)
+ 		 * PENDING_TIMER. Atomically, because other CPUs set PENDING_IPI concurrently.
+ 		 */
+ 		pending = __atomic_fetch_and(&beringia_shared.cpu[beringia_cpu()].pending,
+-		    ~(BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI), __ATOMIC_SEQ_CST);
++		    ~(BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI | BERINGIA_PENDING_DUMP), __ATOMIC_SEQ_CST);
+ 		if (xnu_timer) {
+ 			pending |= BERINGIA_PENDING_TIMER;
+ 		}
+@@ -408,6 +408,9 @@ interrupt(x86_saved_state_t *state)
+ 		if (pending & BERINGIA_PENDING_IPI) {
+ 			cpu_signal_handler(state);
+ 		}
++		if (pending & BERINGIA_PENDING_DUMP) {
++			beringia_dump_threads();
++		}
+ 		return;
+ 	}
+ 
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+index c3ad791..4100140 100644
+--- a/osfmk/x86_64/beringia.c
++++ b/osfmk/x86_64/beringia.c
+@@ -30,6 +30,10 @@
+  */
+ #include <beringia_hosted.h>
+ #include <string.h>
++#include <kern/thread.h>
++#include <kern/queue.h>
++#include <kern/misc_protos.h>
++#include <i386/thread.h>
+ 
+ /* Set by the loader before vstart runs; 0 means not hosted. */
+ uint64_t beringia_hook = 0;
+@@ -129,3 +133,73 @@ beringia_random(void *out, unsigned long len)
+ 		len -= n;
+ 	}
+ }
++
++/*
++ * Bring-up: the host sets BERINGIA_PENDING_DUMP (beringia_xnu.ko parameter "dump") and this prints every thread: id,
++ * name, state, priority, block hint, wait event and continuation, and a frame-pointer backtrace from its saved kernel
++ * state. Called from interrupt() with interrupts off; it reads the global thread list without its lock, which is
++ * good enough for a debugging aid on a stopped (single-CPU) system. Addresses are slid: subtract the kernel slide
++ * before looking them up in the unstripped kernel.
++ */
++extern queue_head_t threads;
++extern int vsnprintf(char *, size_t, const char *, va_list);
++extern int threads_count;
++
++static void
++beringia_dump_line(const char *fmt, ...)
++{
++	char buf[512];
++	va_list ap;
++	int n;
++
++	va_start(ap, fmt);
++	n = vsnprintf(buf, sizeof(buf), fmt, ap);
++	va_end(ap);
++	if (n < 0) {
++		return;
++	}
++	if (n >= (int)sizeof(buf)) {
++		n = sizeof(buf) - 1;
++	}
++	beringia_console_write(buf, (unsigned long)n);
++	beringia_console_putc('\n');
++}
++
++void
++beringia_dump_threads(void)
++{
++	thread_t th;
++	int n = 0;
++
++	beringia_dump_line("BERINGIA dump: %d threads (current %p)", threads_count, current_thread());
++	queue_iterate(&threads, th, thread_t, threads) {
++		char name[MAXTHREADNAMESIZE] = "";
++		char bt[256];
++		int len = 0, depth = 0;
++
++		if (++n > 512) {
++			beringia_dump_line("BERINGIA dump: ... (list too long or corrupt)");
++			break;
++		}
++		thread_get_thread_name(th, name);
++		beringia_dump_line("BERINGIA dump: thread %p tid %llu '%s' state %#x pri %d hint %d event %#llx cont %p",
++		    th, (unsigned long long)th->thread_id, name, th->state, th->sched_pri, (int)th->block_hint,
++		    (unsigned long long)th->wait_event, th->continuation);
++		if (th == current_thread() || th->kernel_stack == 0) {
++			continue;
++		}
++		struct x86_kernel_state *iks = STACK_IKS(th->kernel_stack);
++		uint64_t lo = th->kernel_stack, hi = th->kernel_stack + kernel_stack_size;
++		uint64_t rbp = iks->k_rbp;
++
++		len = snprintf(bt, sizeof(bt), "  rip %#llx bt", (unsigned long long)iks->k_rip);
++		while (depth++ < 12 && rbp >= lo && rbp + 16 <= hi && (rbp & 7) == 0 && len < (int)sizeof(bt) - 20) {
++			uint64_t ret = ((uint64_t *)rbp)[1];
++
++			len += snprintf(bt + len, sizeof(bt) - len, " %#llx", (unsigned long long)ret);
++			rbp = ((uint64_t *)rbp)[0];
++		}
++		beringia_dump_line("BERINGIA dump: %s", bt);
++	}
++	beringia_dump_line("BERINGIA dump: end");
++}

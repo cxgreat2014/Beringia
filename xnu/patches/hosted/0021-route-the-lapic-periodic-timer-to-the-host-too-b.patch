@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 13:07:47 +0800
-Subject: [PATCH 24/25] hosted: route the LAPIC periodic timer to the host too;
+Subject: [PATCH] hosted: route the LAPIC periodic timer to the host too;
  bounded host idle wait
 
 ---

@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 04:06:34 +0800
-Subject: [PATCH 10/25] hosted: guard kalloc_type zone creation against zero
- typed views
+Subject: [PATCH] hosted: guard kalloc_type zone creation against zero typed
+ views
 
 With upstream LLVM there is no Apple type summary, so every kalloc_type view
 is data-only: kalloc_type_view_copy routes them to the data heap and counts

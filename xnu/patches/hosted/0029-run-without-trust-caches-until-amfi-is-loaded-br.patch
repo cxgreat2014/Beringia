@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:16 +0800
+Subject: [PATCH] hosted: run without trust caches until AMFI is loaded
+ (bring-up)
+
+trust_cache_runtime_init panics without the image4 and AMFI interfaces,
+which AppleImage4 and AMFI register; a bare hosted kernel (no kernel
+collection yet) has neither, and the trust cache library itself lives in
+AMFI. Hosted, without them, queries find nothing and loads are refused.
+To be removed once the kernel collection provides the kexts (ROADMAP M4).
+---
+ bsd/kern/kern_trustcache.c | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
+index e10a7fe..fcc0f80 100644
+--- a/bsd/kern/kern_trustcache.c
++++ b/bsd/kern/kern_trustcache.c
+@@ -20,6 +20,7 @@
+  * @APPLE_LICENSE_HEADER_END@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <os/atomic_private.h>
+ #include <os/overflow.h>
+ #include <pexpert/pexpert.h>
+@@ -560,6 +561,13 @@ SECURITY_READ_ONLY_LATE(TrustCacheRuntime_t*) trust_cache_rt = &trust_cache_rt_s
+ TrustCacheMutableRuntime_t trust_cache_mut_rt_storage;
+ SECURITY_READ_ONLY_LATE(TrustCacheMutableRuntime_t*) trust_cache_mut_rt = &trust_cache_mut_rt_storage;
+ 
++/*
++ * BERINGIA bring-up: a bare hosted kernel (no kernel collection yet) has neither AppleImage4 nor AMFI, which register
++ * img4if and amfi; the trust cache library itself lives in AMFI. Until the kernel collection brings them (ROADMAP M4)
++ * the hosted kernel runs without a trust cache runtime: queries find nothing and loads are refused.
++ */
++static bool beringia_no_trust_caches;
++
+ void
+ trust_cache_runtime_init(void)
+ {
+@@ -579,6 +587,13 @@ trust_cache_runtime_init(void)
+ 	allow_legacy_caches = true;
+ #endif
+ 
++	if (beringia_hosted() && (img4if == NULL || amfi == NULL)) {
++		printf("BERINGIA: no image4/AMFI interface (bare kernel, no kernel collection): trust caches disabled\n");
++		beringia_no_trust_caches = true;
++		lck_rw_init(&trust_cache_rt_lock, &trust_cache_lck_grp, 0);
++		return;
++	}
++
+ 	/* Image4 interface needs to be available */
+ 	if (img4if == NULL) {
+ 		panic("image4 interface not available");
+@@ -618,6 +633,10 @@ xnu_load_trust_cache(
+ {
+ 	kern_return_t ret = KERN_DENIED;
+ 
++	if (beringia_no_trust_caches) {
++		return KERN_NOT_SUPPORTED;
++	}
++
+ 	/* Ignore the auxiliary manifest until we add support for it */
+ 	(void)img4_aux_manifest;
+ 	(void)img4_aux_manifest_len;
+@@ -681,6 +700,10 @@ xnu_load_legacy_trust_cache(
+ #if XNU_HAS_LEGACY_TRUST_CACHE_LOADING
+ 	kern_return_t ret = KERN_DENIED;
+ 
++	if (beringia_no_trust_caches) {
++		return KERN_NOT_SUPPORTED;
++	}
++
+ 	/* Allocate the trust cache data structure -- Z_WAITOK_ZERO means this can't fail */
+ 	TrustCache_t *trust_cache = kalloc_type(TrustCache_t, Z_WAITOK_ZERO);
+ 	assert(trust_cache != NULL);
+@@ -741,6 +764,9 @@ xnu_query_trust_cache(
+ 		printf("unable to query trust cache: invalid query type: %u\n", query_type);
+ 		return KERN_INVALID_ARGUMENT;
+ 	}
++	if (beringia_no_trust_caches) {
++		return KERN_NOT_FOUND;
++	}
+ 
+ 	/* Lock the runtime as shared */
+ 	lck_rw_lock_shared(&trust_cache_rt_lock);
+@@ -773,6 +799,10 @@ xnu_check_trust_cache_runtime_for_uuid(
+ {
+ 	kern_return_t ret = KERN_DENIED;
+ 
++	if (beringia_no_trust_caches) {
++		return KERN_NOT_FOUND;
++	}
++
+ 	/* Lock the runtime as shared */
+ 	lck_rw_lock_shared(&trust_cache_rt_lock);
+ 

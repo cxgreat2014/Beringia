@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:15 +0800
+Subject: [PATCH] hosted: leave the host's memory types, MCA banks, errata MSRs
+ and PMU alone
+
+All of these program state of the CPU that the host owns and the world switch
+does not switch:
+
+- pat_init/MTRR updates (mtrr_update_action) rewrite IA32_PAT/MTRRs, with
+  caches disabled and wbinvd;
+- install_real_mode_bootstrap copies the AP trampoline to physical page
+  0x2000, which is the host's RAM (the host starts CPUs, not INIT/SIPI);
+- mca_cpu_init enables and clears the machine-check banks;
+- the TSX and SRBDS workarounds write TSX_CTRL / TSX_FORCE_ABORT /
+  MCU_OPT_CTRL, the host's mitigation state;
+- monotonic enables the fixed counters and claims the PMI.
+
+PCIDs are disabled in code when hosted (Linux tags its translations with
+PCIDs 1..6), instead of relying on the -pmap_pcid_disable boot-arg.
+---
+ osfmk/i386/acpi.c               | 5 +++++
+ osfmk/i386/cpuid.c              | 6 +++++-
+ osfmk/i386/machine_check.c      | 6 ++++++
+ osfmk/i386/mtrr.c               | 6 ++++++
+ osfmk/x86_64/monotonic_x86_64.c | 4 +++-
+ osfmk/x86_64/pmap_pcid.c        | 8 ++++++++
+ 6 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/osfmk/i386/acpi.c b/osfmk/i386/acpi.c
+index 9559ee1..19e9f53 100644
+--- a/osfmk/i386/acpi.c
++++ b/osfmk/i386/acpi.c
+@@ -528,6 +528,11 @@ extern char real_mode_bootstrap_base[];
+ void
+ install_real_mode_bootstrap(void *prot_entry)
+ {
++	/* BERINGIA: physical page REAL_MODE_BOOTSTRAP_OFFSET is the host's RAM; the host starts CPUs, not INIT/SIPI. */
++	if (beringia_hosted()) {
++		return;
++	}
++
+ 	/*
+ 	 * Copy the boot entry code to the real-mode vector area REAL_MODE_BOOTSTRAP_OFFSET.
+ 	 * This is in page 1 which has been reserved for this purpose by
+diff --git a/osfmk/i386/cpuid.c b/osfmk/i386/cpuid.c
+index 08cbc0f..5f8f489 100644
+--- a/osfmk/i386/cpuid.c
++++ b/osfmk/i386/cpuid.c
+@@ -270,6 +270,9 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
+ 	 * Note that if disabling TSX is supported, disablement is prefered over forcing
+ 	 * TSX transactions to abort.
+ 	 */
++	if (beringia_hosted()) {
++		goto skip_msr_was;     /* BERINGIA: TSX_CTRL / MCU_OPT_CTRL are the host's mitigation state */
++	}
+ 	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
+ 		/* This must be executed on all logical processors */
+ 		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+@@ -288,6 +291,7 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
+ 		wrmsr64(MSR_IA32_MCU_OPT_CTRL, mcuoptctrl);
+ 	}
+ 
++skip_msr_was:
+ 	if (on_slave) {
+ 		return;
+ 	}
+@@ -1652,7 +1656,7 @@ cpuid_do_precpuid_was(void)
+ 	 */
+ 
+ 	/* Note the TSX disablement, we do not support force-on since it depends on MSRs being present */
+-	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
++	if (!beringia_hosted() && cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
+ 		/* This must be executed on all logical processors */
+ 		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+ 		cpuid_tsx_disabled = true;
+diff --git a/osfmk/i386/machine_check.c b/osfmk/i386/machine_check.c
+index 6a9a831..9ccc1bf 100644
+--- a/osfmk/i386/machine_check.c
++++ b/osfmk/i386/machine_check.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <kern/zalloc.h>
+ #include <mach/mach_time.h>
+ #include <i386/cpu_data.h>
+@@ -117,6 +118,11 @@ mca_cpu_init(void)
+ {
+ 	unsigned int    i;
+ 
++	/* BERINGIA: the machine-check banks (and their error state) belong to the host. */
++	if (beringia_hosted()) {
++		return;
++	}
++
+ 	/*
+ 	 * The first (boot) processor is responsible for discovering the
+ 	 * machine check architecture present on this machine.
+diff --git a/osfmk/i386/mtrr.c b/osfmk/i386/mtrr.c
+index 4b5020f..040c9e8 100644
+--- a/osfmk/i386/mtrr.c
++++ b/osfmk/i386/mtrr.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <mach/kern_return.h>
+ #include <kern/zalloc.h>
+ #include <kern/cpu_number.h>
+@@ -326,6 +327,11 @@ mtrr_update_action(void * cache_control_type)
+ 	uintptr_t cr0, cr4;
+ 	uintptr_t tmp;
+ 
++	/* BERINGIA: MTRRs and the PAT belong to the host (this would also run with caches disabled and wbinvd). */
++	if (beringia_hosted()) {
++		return;
++	}
++
+ 	cr0 = get_cr0();
+ 	cr4 = get_cr4();
+ 
+diff --git a/osfmk/x86_64/monotonic_x86_64.c b/osfmk/x86_64/monotonic_x86_64.c
+index 6274ce9..53bba4d 100644
+--- a/osfmk/x86_64/monotonic_x86_64.c
++++ b/osfmk/x86_64/monotonic_x86_64.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <i386/cpu_data.h>
+ #include <i386/cpuid.h>
+ #include <i386/lapic.h>
+@@ -365,7 +366,8 @@ mt_microstackshot_start_arch(uint64_t period)
+ void
+ mt_early_init(void)
+ {
+-	if (PE_parse_boot_argn("-nomt_core", NULL, 0)) {
++	/* BERINGIA: the PMU (fixed counters, GLOBAL_CTRL, the PMI vector) belongs to the host. */
++	if (beringia_hosted() || PE_parse_boot_argn("-nomt_core", NULL, 0)) {
+ 		return;
+ 	}
+ 	i386_cpu_info_t *info = cpuid_info();
+diff --git a/osfmk/x86_64/pmap_pcid.c b/osfmk/x86_64/pmap_pcid.c
+index 04131ed..35099ec 100644
+--- a/osfmk/x86_64/pmap_pcid.c
++++ b/osfmk/x86_64/pmap_pcid.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++#include <beringia_hosted.h>
+ #include <i386/proc_reg.h>
+ #include <i386/cpuid.h>
+ #include <i386/tsc.h>
+@@ -90,6 +91,13 @@ pmap_pcid_configure(void)
+ 		pmap_pcid_disabled = TRUE;
+ 	}
+ #endif
++	/*
++	 * BERINGIA: PCIDs are shared with the host (Linux tags its own translations with PCIDs 1..6), so the hosted
++	 * kernel must not tag any: PCID 0 only, whatever the boot-args say.
++	 */
++	if (beringia_hosted()) {
++		pmap_pcid_disabled = TRUE;
++	}
+ 	if (pmap_pcid_disabled || no_shared_cr3) {
+ 		unsigned i;
+ 		/* Reset PCID status, as we may have picked up

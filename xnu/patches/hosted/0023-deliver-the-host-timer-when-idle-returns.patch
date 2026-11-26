@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 14:18:38 +0800
+Subject: [PATCH] hosted: deliver the host timer when idle returns
+
+machine_idle now sleeps until XNU's own deadline and, on return, raises
+XNU's timer software interrupt for a pending host deadline. Linux has
+already handled and EOId its hardware interrupts while the CPU slept, so
+there is no hardware interrupt left to enter interrupt() for us. XNU LAPIC
+timer/IPI vectors are no longer forwarded to Linux: they are XNU software
+interrupts and directly request their handlers.
+---
+ osfmk/i386/pmCPU.c | 31 +++++++++++++++----------------
+ osfmk/i386/trap.c  | 22 ++++++++++++++++------
+ 2 files changed, 31 insertions(+), 22 deletions(-)
+
+diff --git a/osfmk/i386/pmCPU.c b/osfmk/i386/pmCPU.c
+index ef95350..f767f55 100644
+--- a/osfmk/i386/pmCPU.c
++++ b/osfmk/i386/pmCPU.c
+@@ -173,22 +173,21 @@ machine_idle(void)
+ 		 * stopping during a GV3 transition).
+ 		 */
+ 		if (beringia_hosted()) {
+-			/* BERINGIA debug: report this CPU's interrupt flag and which IDT is active when it idles. */
+-			uint64_t flags;
+-			struct { uint16_t limit; uint64_t base; } __attribute__((packed)) idtr;
+-			static unsigned int n;
+-
+-			__asm__ volatile("pushfq; pop %0" : "=r"(flags));
+-			__asm__ volatile("sidt %0" : "=m"(idtr));
+-			if (n++ < 5) {
+-				kprintf("BERINGIA: idle IF=%d IDTRbase=%016llx\n", (flags & 0x200) != 0, idtr.base);
+-			}
+-			/* BERINGIA: idle on the host (Linux runs other work on this CPU). The host wakes us when the XNU timer
+-			 * it armed for us fires or another CPU kicks us; the pending timer/IPI is delivered by the forwarded
+-			 * interrupt path. hlt would park this CPU with nothing to wake it (the LAPIC is the host one). */
+-			beringia_call(BERINGIA_CALL_IDLE, 0, (unsigned long)&beringia_shared.cpu[beringia_cpu()].pending);
+-			if (n < 5) {
+-				kprintf("BERINGIA: idle returned %u\n", n);
++			/*
++			 * BERINGIA: sleep on the host until XNU's own next deadline (setPop armed it through
++			 * lapic_set_tsc_deadline_timer), a kick, or a stop. Linux handles and EOIs its hardware interrupts
++			 * while we sleep, so on return there is no pending hardware interrupt that would enter interrupt()
++			 * for us: deliver the host's pending timer/IPI explicitly with XNU's own software-interrupt path,
++			 * just as the native machine_idle_exit does with lapic_timer_swi(). We are still at splsched here
++			 * (interrupts disabled); the software interrupt enters interrupt() with a proper frame and returns
++			 * before machine_idle_exit re-enables interrupts.
++			 */
++			unsigned int cpu = beringia_cpu();
++			uint64_t deadline = beringia_shared.cpu[cpu].timer_deadline;
++
++			beringia_call(BERINGIA_CALL_IDLE, deadline, (unsigned long)&beringia_shared.cpu[cpu].pending);
++			if (beringia_shared.cpu[cpu].pending & BERINGIA_PENDING_TIMER) {
++				lapic_timer_swi();
+ 			}
+ 		} else {
+ 			pal_hlt();
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index da705e0..b41cbb8 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -377,15 +377,25 @@ interrupt(x86_saved_state_t *state)
+ 	}
+ 
+ 	/*
+-	 * BERINGIA: every external interrupt is the host's (Linux owns the LAPIC, IOAPIC and devices). Re-deliver the
+-	 * vector to Linux, then run whatever the host marked pending for this XNU CPU (its timer, IPIs from other XNU
+-	 * CPUs) in this same interrupt context. XNU's normal return path then takes care of ASTs and preemption.
++	 * BERINGIA: hardware vectors belong to the host (Linux owns the LAPIC, IOAPIC and devices). Re-deliver those to
++	 * Linux, then run whatever the host marked pending for this XNU CPU in this same interrupt context. XNU's own
++	 * LAPIC timer/IPI vectors are different: they are software interrupts XNU raises on itself (machine_idle uses
++	 * lapic_timer_swi for exactly this), so they must NOT be forwarded to Linux; they directly request the handler.
+ 	 */
+ 	if (beringia_hosted()) {
+-		unsigned int pending;
++		unsigned int pending = beringia_shared.cpu[beringia_cpu()].pending;
++		boolean_t xnu_timer = interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_TIMER_INTERRUPT);
++		boolean_t xnu_ipi = interrupt_num == (LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_INTERPROCESSOR_INTERRUPT);
+ 
+-		beringia_call(BERINGIA_CALL_FORWARD_IRQ, interrupt_num, 0);
+-		pending = beringia_shared.cpu[beringia_cpu()].pending;
++		if (!xnu_timer && !xnu_ipi) {
++			beringia_call(BERINGIA_CALL_FORWARD_IRQ, interrupt_num, 0);
++		}
++		if (xnu_timer) {
++			pending |= BERINGIA_PENDING_TIMER;
++		}
++		if (xnu_ipi) {
++			pending |= BERINGIA_PENDING_IPI;
++		}
+ 		if (pending & BERINGIA_PENDING_TIMER) {
+ 			beringia_shared.cpu[beringia_cpu()].pending &= ~BERINGIA_PENDING_TIMER;
+ 			rtclock_intr(state);

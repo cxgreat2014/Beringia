@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 04:43:24 +0800
-Subject: [PATCH 13/25] hosted: forward external interrupts to Linux, deliver
- pending timer/IPI
+Subject: [PATCH] hosted: forward external interrupts to Linux, deliver pending
+ timer/IPI
 
 ---
  osfmk/i386/trap.c | 27 +++++++++++++++++++++++++++

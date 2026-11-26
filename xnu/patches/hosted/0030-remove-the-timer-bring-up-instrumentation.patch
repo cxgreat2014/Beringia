@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Thu, 26 Nov 2026 16:19:16 +0800
+Subject: [PATCH] hosted: remove the timer bring-up instrumentation
+
+The rtclock heartbeat and the setPop / lapic_set_tsc_deadline_timer prints
+were added to find the lost timer (it was the host LAPIC being reset, see
+"never reprogram the host's local APIC"). The host-requested thread dump
+covers what they were for.
+---
+ osfmk/i386/lapic_native.c |  5 -----
+ osfmk/i386/rtclock.c      | 18 ------------------
+ 2 files changed, 23 deletions(-)
+
+diff --git a/osfmk/i386/lapic_native.c b/osfmk/i386/lapic_native.c
+index dbe0416..4b0b747 100644
+--- a/osfmk/i386/lapic_native.c
++++ b/osfmk/i386/lapic_native.c
+@@ -852,11 +852,6 @@ lapic_set_timer_fast(
+ void
+ lapic_set_tsc_deadline_timer(uint64_t deadline)
+ {
+-	static unsigned int sc;
+-
+-	if (sc++ < 6) {
+-		kprintf("BERINGIA: lapic_set_tsc_deadline deadline=%llu hook=%llx\n", deadline, (unsigned long long)beringia_hook);
+-	}
+ 	/* BERINGIA: the host owns the real TSC-deadline MSR; arm its timer, which marks this CPU pending and kicks it. */
+ 	if (beringia_hosted()) {
+ 		beringia_call(BERINGIA_CALL_SET_TIMER, deadline, 0);
+diff --git a/osfmk/i386/rtclock.c b/osfmk/i386/rtclock.c
+index b049a53..375b78e 100644
+--- a/osfmk/i386/rtclock.c
++++ b/osfmk/i386/rtclock.c
+@@ -424,17 +424,6 @@ rtclock_intr(
+ 	uint64_t        rip;
+ 	boolean_t       user_mode = FALSE;
+ 
+-#if defined(__x86_64__)
+-	/* BERINGIA debug: heartbeat so we can tell whether the host timer is being delivered. */
+-	if (beringia_hosted()) {
+-		static unsigned int hb;
+-
+-		if (++hb % 250 == 0) {
+-			kprintf("BERINGIA: rtclock heartbeat %u\n", hb);
+-		}
+-	}
+-#endif
+-
+ 	assert(get_preemption_level() > 0);
+ 	assert(!ml_get_interrupts_enabled());
+ 
+@@ -485,13 +474,6 @@ setPop(uint64_t time)
+ 		pop = rtc_timer->rtc_set(time, now);
+ 	}
+ 
+-	if (beringia_hosted()) {
+-		static unsigned int spc;
+-
+-		if (spc++ < 8) {
+-			kprintf("BERINGIA: setPop time=%llu rtc_set=%p\n", time, rtc_timer->rtc_set);
+-		}
+-	}
+ 	/* Record requested and actual deadlines set */
+ 	x86_lcpu()->rtcDeadline = time;
+ 	x86_lcpu()->rtcPop      = pop;

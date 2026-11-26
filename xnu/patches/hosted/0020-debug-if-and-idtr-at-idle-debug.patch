@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Weiyi Feng <fwy1998@gmail.com>
 Date: Thu, 26 Nov 2026 12:35:00 +0800
-Subject: [PATCH 23/25] hosted: debug IF and IDTR at idle (debug)
+Subject: [PATCH] hosted: debug IF and IDTR at idle (debug)
 
 ---
  EXTERNAL_HEADERS/beringia/abi.h | 108 ++++++++++++++++++++++++++++++++
