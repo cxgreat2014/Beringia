@@ -15,9 +15,9 @@ Chooser is idle in `-[NSApplication run]` (run `20261128-023734`). Its window do
 there is no input. How each blocker on the way was found and fixed:
 [research/m5-userspace-bringup.md, section 7](research/m5-userspace-bringup.md).
 
-- The legacy prelinked kernel links **49 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
-  (46: security, storage, APFS, AppleSMC, DSMOS, serial, HID, graphics, GPU wrangler, IOSurface, LiveFS) plus
-  `BeringiaDisk`, `BeringiaSMC` and `BeringiaFramebuffer`; the recipe is in
+- The legacy prelinked kernel links **50 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
+  (47: security, storage, APFS, AppleSMC, DSMOS, serial, HID, graphics, GPU wrangler, IOSurface, LiveFS,
+  EndpointSecurity) plus `BeringiaDisk`, `BeringiaSMC` and `BeringiaFramebuffer`; the recipe is in
   [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
 - The display is the loader's boot framebuffer (`fb=WxH`, default 1280x800), driven through the device-tree node
   `/display` by `BeringiaFramebuffer` (one fully described 60 Hz mode, an EDID; it opens itself at boot so the display
@@ -64,8 +64,9 @@ The state as of the audit (2026-11-27), kept for the record:
 - **The image lacks most of the OS cryptex**: only 19 runtime files (dyld caches, libSystem, ...) of its 2757 file
   forks were staged. `pkd` crash-loops on `PlugInKitDaemon.framework` (not on disk, not in the dyld cache). The App
   cryptex is not staged either. (`coreduetd`'s PeopleSuggester resource was a lost hard link; fixed.)
-- Other crash loops: `timed` (fixed: it was powerd); `fskitd` (fixed: lifs.kext); `data-protection` (`seputil`,
-  arm64e only) fails with `Bad CPU type`, which is expected on Intel.
+- Other crash loops: `timed` (fixed: it was powerd); `fskitd` (fixed: lifs.kext); `endpointsecurityd` (fixed:
+  `EndpointSecurity.kext` in the KC, run `20261128-051403`); `data-protection` (`seputil`, arm64e only) fails with
+  `Bad CPU type`, which is expected on Intel.
 - A self-written unsigned `/sbin/launchd` is rejected by AMFI ("The system only allows platform binaries").
 
 ## Important fixes in this round
@@ -116,7 +117,7 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 |---|---|
 | Userland | The full system's launchd and ~200 processes run, WindowServer and Language Chooser among them. No interactive shell, no input, no login yet. bluetoothd is disabled in the image (no controller). |
 | System image | One APFS volume (role 0), not the System/Data/Preboot/VM container macOS expects; hand-built, not reproducible from this repository yet; no `SF_RESTRICTED` flags (hence `CSR_ALLOW_UNRESTRICTED_FS`). DroidVM found single-volume and union layouts a source of daemon crash loops and moved to a real multi-volume container. |
-| kexts | A legacy prelinked kernel (49 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only, with the DSMOS key the user supplies (`BERINGIA_OSK_FILE`). |
+| kexts | A legacy prelinked kernel (50 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only, with the DSMOS key the user supplies (`BERINGIA_OSK_FILE`). |
 | trust caches | `trust_cache_init` succeeds with the img4 interface; no full-system static trust cache is supplied by the loader yet. Patch 0029 remains as the no-image4 fallback. |
 | kalloc_type | Degraded to size-based data zones (upstream LLVM has no `__builtin_xnu_type_summary`). Kext views use the external fallback in the static format; no hang has been observed. |
 | Block I/O | BeringiaDisk mounts APFS read-write. It reports a volatile write cache and a flush is an `fsync` of the image on the host; force-unit-access writes are not honoured individually. The read-only fallback is not validated. |

@@ -193,13 +193,14 @@ Linux (`tools/debug/harvest.sh`); user-space backtraces in the thread dump, name
 | black screen: CoreDisplay `IOFBSetDisplayModeAndDepth: Setting mode 0x0` / `Failed to obtain mode info`, `Setting main display ... offline in CGXConstructVirtualFramebuffer`: WindowServer composites into a virtual framebuffer | CoreDisplay's port of IOGraphicsLib (disassembled from the shared cache) calls a connection usable only if an `IODisplay` already sits under the framebuffer when it looks; the display attaches only once the framebuffer is opened, i.e. after WindowServer looked. IOBootNDRV also describes its one mode poorly (refresh 0, no timing, no EDID) | `BeringiaFramebuffer` (an IOFramebuffer with a 60 Hz detailed timing and an EDID) that opens itself at boot and raises the connect-change interrupt when the display attaches: CoreDisplay then sets mode 1, `Mode has dimensions 1280x800` (run `20261128-035849`) |
 | the screen is still black, with the cursor; WindowServer orders Language Chooser's window front | run `20261128-042946`: `Installer Progress` releases its CG shield window 20 s in, SkyLight starts its `Software compositor`, and IOPresentment logs `Unable to acquire map` while CoreDisplay builds the pipe for our framebuffer. That "software compositor" renders on the CPU but still scans out through the CoreDisplay DisplayPipe, whose presentation is IOPresentment: it needs an AppleGPUWrangler GPU with an `IOAccelerator` under an `IOPCIDevice`. Our framebuffer has none of that (GPUWrangler: `(NG) ... pci 0 ... accel 0`), so a bare IOFramebuffer cannot receive pixels. Apple's own software path is a fake PCI GPU: `AppleParavirtGPU` (IOPCIMatch `0xEEEE106B`, AcceleratorProperties with `IOAccelDisplayPipeCapabilities`) | next: a virtual `IOPCIDevice` with a minimal `IOAccelerator` (BeringiaPCI), or AppleParavirtGPU's shape with our framebuffer as its aperture |
 
-The kernel collection is now 49 kexts ([scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts) says why
+The kernel collection is now 50 kexts, `EndpointSecurity` among them for `endpointsecurityd`'s loop
+([scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts) says why
 each is there, plus BeringiaDisk, BeringiaSMC and BeringiaFramebuffer).
 
-macOS's logd keeps recent entries in memory and the run ends without a shutdown, so the harvested unified log can
-miss the last minutes: let a run go on for a while before stopping it when its last messages matter. Crash loops left: `pkd` (OS cryptex content), `mobileassetd`, `Kerberos.digest-service`, the
-`distnoted` agent (`exit(78)`), `endpointsecurityd` (no EndpointSecurity kext); `timed` and `coreduetd` no longer
-crash.
+macOS's logd keeps recent entries in memory, so `stop.sh` now ends a run with a real shutdown (patch 0048), and logd
+flushes on the way. Crash loops left: `pkd` and `cryptexd` (OS cryptex content), `mobileassetd`,
+`Kerberos.digest-service`, the `distnoted` agent (`exit(78)`); `timed`, `coreduetd` and (since 2026-11-28, run
+`20261128-051403`) `endpointsecurityd` no longer crash.
 
 ## Reproduce the full-system boot
 

@@ -67,3 +67,6 @@ AppleGraphicsControl.kext/Contents/PlugIns/AppleGraphicsDeviceControl.kext
 AppleGraphicsControl.kext/Contents/PlugIns/AppleGPUWrangler.kext
 IOSurface.kext
 lifs.kext
+# endpointsecurityd waits for the EndpointSecurityDriver personality (IOResources) and exits without it, in a loop
+# that fills launchd's log; its libraries (AppleMobileFileIntegrity, Quarantine) are already here.
+EndpointSecurity.kext
