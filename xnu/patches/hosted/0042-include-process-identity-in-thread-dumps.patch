@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 13:04:05 +0800
+Subject: [PATCH] hosted: include process identity in thread dumps
+
+---
+ osfmk/x86_64/beringia.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+index ce9b227..3e88322 100644
+--- a/osfmk/x86_64/beringia.c
++++ b/osfmk/x86_64/beringia.c
+@@ -34,6 +34,7 @@
+ #include <kern/queue.h>
+ #include <kern/misc_protos.h>
+ #include <i386/thread.h>
++#include <i386/mp.h>
+ 
+ /* Set by the loader before vstart runs; 0 means not hosted. */
+ uint64_t beringia_hook = 0;
+@@ -182,6 +183,14 @@ beringia_dump_threads(void)
+ 	thread_t th;
+ 	int n = 0;
+ 
++	/*
++	 * The walk takes no lock (interrupt context): only safe while no other CPU can create, terminate or move a
++	 * thread, i.e. with one CPU.
++	 */
++	if (real_ncpus > 1) {
++		beringia_dump_line("BERINGIA dump: refused: %u CPUs (the thread walk is lock-free, one CPU only)", real_ncpus);
++		return;
++	}
+ 	beringia_dump_line("BERINGIA dump: %d threads (current %p)", threads_count, current_thread());
+ 	queue_iterate(&threads, th, thread_t, threads) {
+ 		char name[MAXTHREADNAMESIZE] = "";
+@@ -193,8 +202,10 @@ beringia_dump_threads(void)
+ 			break;
+ 		}
+ 		thread_get_thread_name(th, name);
+-		beringia_dump_line("BERINGIA dump: thread %p tid %llu '%s' state %#x pri %d hint %d event %#llx cont %p",
+-		    th, (unsigned long long)th->thread_id, name, th->state, th->sched_pri, (int)th->block_hint,
++		task_t task = get_threadtask(th);
++		const char *procname = task_best_name(task);
++		beringia_dump_line("BERINGIA dump: pid %d proc '%s' thread %p tid %llu '%s' state %#x pri %d hint %d event %#llx cont %p",
++		    task_pid(task), procname, th, (unsigned long long)th->thread_id, name, th->state, th->sched_pri, (int)th->block_hint,
+ 		    (unsigned long long)th->wait_event, th->continuation);
+ 		if (th == current_thread() || th->kernel_stack == 0) {
+ 			continue;

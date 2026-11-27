@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 11:33:07 +0800
+Subject: [PATCH] hosted: add a boot argument to suppress user core dumps
+
+---
+ bsd/kern/kern_core.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/bsd/kern/kern_core.c b/bsd/kern/kern_core.c
+index 94c4ec8..f8f25f3 100644
+--- a/bsd/kern/kern_core.c
++++ b/bsd/kern/kern_core.c
+@@ -58,6 +58,7 @@
+ #include <mach/vm_statistics.h>
+ 
+ #include <IOKit/IOBSD.h>
++#include <pexpert/pexpert.h>
+ 
+ #include <vm/vm_kern_xnu.h>
+ #include <vm/vm_protos.h> /* last */
+@@ -120,6 +121,12 @@ is_coredump_eligible(proc_t core_proc)
+ 
+ 	vfs_context_t ctx = vfs_context_current();
+ 	kauth_cred_t cred = vfs_context_ucred(ctx);
++	uint32_t no_coredump = 0;
++
++	/* BERINGIA: keep bring-up crashes from writing multi-GiB shared-cache cores. */
++	if (PE_parse_boot_argn("beringia_no_coredump", &no_coredump, sizeof(no_coredump)) && no_coredump) {
++		return EPERM;
++	}
+ 
+ 	if (do_coredump == 0 ||         /* Not dumping at all */
+ 	    ((sugid_coredump == 0) &&   /* Not dumping SUID/SGID binaries */

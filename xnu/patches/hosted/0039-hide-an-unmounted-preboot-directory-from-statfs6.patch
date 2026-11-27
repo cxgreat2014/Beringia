@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 11:33:07 +0800
+Subject: [PATCH] hosted: hide an unmounted Preboot directory from statfs64
+
+---
+ bsd/vfs/vfs_syscalls.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index a2ce29c..11a5710 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -131,6 +131,7 @@
+ #include <libkern/OSAtomic.h>
+ #include <os/atomic_private.h>
+ #include <pexpert/pexpert.h>
++#include <beringia_hosted.h>
+ #include <IOKit/IOBSD.h>
+ 
+ // deps for MIG call
+@@ -3670,6 +3671,37 @@ quotactl(__unused proc_t p, __unused struct quotactl_args *uap, __unused int32_t
+ }
+ #endif /* QUOTA */
+ 
++/*
++ * BERINGIA: a single-volume bring-up disk has an empty Preboot directory on the
++ * root volume instead of a separate Preboot mount. CoreServices prewarms its
++ * volume cache with statfs64("/System/Volumes/Preboot") and aborts if that
++ * reports the root device a second time. Let it skip this unmounted directory.
++ */
++static bool
++beringia_preboot_hidden(vnode_t vp)
++{
++	static int enabled = -1;        /* the boot argument, read once */
++	char path[128];
++	int length = sizeof(path);
++
++	if (enabled < 0) {
++		uint32_t arg = 0;
++
++		enabled = beringia_hosted() && PE_parse_boot_argn("beringia_hide_preboot", &arg, sizeof(arg)) && arg;
++	}
++	if (!enabled) {
++		return false;
++	}
++	if (rootvnode == NULLVP || vp->v_mount != rootvnode->v_mount) {
++		return false;
++	}
++	if (vn_getpath(vp, path, &length) != 0) {
++		return false;
++	}
++	return strncmp(path, "/System/Volumes/Preboot", 23) == 0 &&
++	       (path[23] == 0 || path[23] == '/');
++}
++
+ static int
+ statfs_internal(proc_t p, struct mount *mp, user_addr_t bufp)
+ {
+@@ -3819,6 +3851,11 @@ statfs64(__unused struct proc *p, struct statfs64_args *uap, __unused int32_t *r
+ 	vp = ndp->ni_vp;
+ 	mp = vp->v_mount;
+ 	nameidone(ndp);
++	if (beringia_preboot_hidden(vp)) {
++		vnode_put(vp);
++		error = ENOENT;
++		goto out;
++	}
+ 
+ #if CONFIG_MACF
+ 	error = mac_mount_check_stat(ctxp, mp);

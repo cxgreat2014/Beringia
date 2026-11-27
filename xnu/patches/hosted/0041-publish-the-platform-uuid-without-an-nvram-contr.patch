@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 11:45:28 +0800
+Subject: [PATCH] hosted: publish the platform UUID without an NVRAM controller
+
+---
+ iokit/Kernel/BeringiaPlatform.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/iokit/Kernel/BeringiaPlatform.cpp b/iokit/Kernel/BeringiaPlatform.cpp
+index d560cdf..bb33c5d 100644
+--- a/iokit/Kernel/BeringiaPlatform.cpp
++++ b/iokit/Kernel/BeringiaPlatform.cpp
+@@ -75,6 +75,10 @@ public:
+ 		 */
+ 		publishResource("IORTC", this);
+ 		publishResource("IONVRAM");
++		/* On x86, registerNVRAMController also publishes IOPlatformUUID. Do the same for the stub NVRAM path;
++		 * gethostuuid() waits for this resource. The loader supplies /efi/platform/system-id, the property
++		 * generatePlatformUUID() reads on x86 (/options belongs to the NVRAM stub, which hides its DT properties). */
++		publishPlatformUUIDAndSerial();
+ 		/* registerNVRAMController also unblocks hw.osenvironment (on Intel, in DEVELOPMENT builds): launchd's
+ 		 * first sysctl of it waits for that. With no NVRAM controller, the platform must do it itself. */
+ 		sysctl_unblock_osenvironment();

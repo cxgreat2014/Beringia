@@ -9,35 +9,56 @@ launchd's crash legible: EXC_BAD_ACCESS with fault address 0 (a NULL
 pointer passed to a string/memory routine), rather than a bare
 "initproc failed to start".
 ---
- osfmk/kern/exception.c | 12 ++++++++++++
- 1 file changed, 12 insertions(+)
+ osfmk/kern/exception.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
 
 diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
-index 49c0c53..ab232a9 100644
+index 49c0c53..d2aacbd 100644
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -212,6 +212,12 @@ exception_deliver(
- 	thread_set_status_flags_t get_flags = TSSF_TRANSLATE_TO_USER;
- 	thread_set_status_flags_t set_flags = TSSF_CHECK_USER_FLAGS;
+@@ -100,6 +100,28 @@
+ #include <libkern/coreanalytics/coreanalytics.h>
  
-+	/* BERINGIA: userspace bring-up aid — show what a fatal userspace exception actually was. */
-+	if (codeCnt >= 2 && (exception == EXC_BAD_ACCESS || exception == EXC_BAD_INSTRUCTION || exception == EXC_ARITHMETIC)) {
-+		printf("BERINGIA: user exception %d code %#llx %#llx (thread %p)\n",
-+		    exception, (unsigned long long)code[0], (unsigned long long)code[1], thread);
+ #include <sys/code_signing.h> /* for developer mode state */
++#include <beringia_hosted.h>
++
++/*
++ * BERINGIA: userspace bring-up aid. Hosted only, one console line per exception as it enters triage (not one per
++ * thread/task/host delivery attempt): the exception type, the two Mach code words and who took it. Not every one is
++ * fatal; a handler may still recover from it.
++ */
++static void
++beringia_log_user_exception(thread_t thread, exception_type_t exception, mach_exception_data_t code,
++    mach_msg_type_number_t codeCnt)
++{
++	task_t task;
++
++	if (!beringia_hosted() || codeCnt < 2 ||
++	    (exception != EXC_BAD_ACCESS && exception != EXC_BAD_INSTRUCTION && exception != EXC_ARITHMETIC)) {
++		return;
 +	}
++	task = get_threadtask(thread);
++	printf("BERINGIA: user exception %d code %#llx %#llx (pid %d %s, tid %llu)\n", exception,
++	    (unsigned long long)code[0], (unsigned long long)code[1], task_pid(task), task_best_name(task),
++	    thread_tid(thread));
++}
+ 
+ bool panic_on_exception_triage = false;
+ 
+@@ -744,6 +766,8 @@ exception_triage_thread(
+ 		panic("called exception_triage when it was forbidden by the boot environment");
+ 	}
+ 
++	beringia_log_user_exception(thread, exception, code, codeCnt);
 +
  	/*
- 	 *  Save work if we are terminating.
- 	 *  Just go back to our AST handler.
-@@ -981,6 +987,12 @@ bsd_exception(
+ 	 * Try to raise the exception at the activation level.
+ 	 */
+@@ -981,6 +1005,8 @@ bsd_exception(
  	task = current_task();
  	mutex = &task->itk_lock_data;
  
-+	/* BERINGIA: userspace bring-up aid — show what a fatal userspace exception actually was. */
-+	if (codeCnt >= 2 && (exception == EXC_BAD_ACCESS || exception == EXC_BAD_INSTRUCTION || exception == EXC_ARITHMETIC)) {
-+		printf("BERINGIA: user exception %d code %#llx %#llx (thread %p)\n",
-+		    exception, (unsigned long long)code[0], (unsigned long long)code[1], self);
-+	}
++	beringia_log_user_exception(self, exception, code, codeCnt);
 +
  	kr = exception_deliver(self, exception, code, codeCnt, task->exc_actions, mutex);
  

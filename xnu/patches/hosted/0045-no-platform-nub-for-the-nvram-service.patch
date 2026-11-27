@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 15:21:25 +0800
+Subject: [PATCH] hosted: no platform nub for the NVRAM service
+
+BeringiaPlatform keeps the whole device tree (empty exclude list), so
+createNubs also met /options, which processTopLevel had replaced with the
+IODTNVRAM stub, and made an IOPlatformDevice from it. That nub copied its
+properties from the stub's dictionaryWithProperties(), which is NULL
+without an NVRAM handler: the registry entry with no property table that
+hosted patches 0017/0038 worked around and that softwareupdated finally
+tripped over in serializeProperties (named by the previous patch:
+IOPlatformDevice, registered from IODTPlatformExpert::createNubs). The
+NVRAM service is not a platform device: do not make a nub of it.
+---
+ iokit/Kernel/BeringiaPlatform.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/iokit/Kernel/BeringiaPlatform.cpp b/iokit/Kernel/BeringiaPlatform.cpp
+index bb33c5d..c9841f9 100644
+--- a/iokit/Kernel/BeringiaPlatform.cpp
++++ b/iokit/Kernel/BeringiaPlatform.cpp
+@@ -37,6 +37,7 @@
+  * IOPanicPlatform, so IOKit picks it instead of panicking with "Unable to find driver for this platform".
+  */
+ #include <IOKit/IOPlatformExpert.h>
++#include <IOKit/IONVRAM.h>
+ #include <machine/machine_routines.h>
+ extern "C" void sysctl_unblock_osenvironment(void);
+ extern "C" {
+@@ -56,6 +57,21 @@ public:
+ 	virtual const char * deleteList( void ) APPLE_KEXT_OVERRIDE { return ""; }
+ 	virtual const char * excludeList( void ) APPLE_KEXT_OVERRIDE { return ""; }
+ 
++	/*
++	 * processTopLevel has already put the NVRAM service (here the IODTNVRAM stub) in /options' place in the
++	 * device-tree plane, so createNubs meets it among the root's children. It is not a platform device, and a nub made
++	 * from it copies its properties from the stub's dictionaryWithProperties(), which is NULL: an IOPlatformDevice
++	 * with no property table, which faulted in getProperty, dictionaryWithProperties and serializeProperties in turn.
++	 * (The generic excludeList skips "options" by name, but the stub no longer has a name property to match.)
++	 */
++	virtual IOService * createNub( IORegistryEntry * from ) APPLE_KEXT_OVERRIDE
++	{
++		if (OSDynamicCast(IODTNVRAM, from)) {
++			return NULL;
++		}
++		return IODTPlatformExpert::createNub(from);
++	}
++
+ 	/*
+ 	 * The number of CPUs normally reaches the kernel from the CPU interrupt controller the ACPI platform sets up
+ 	 * (IOCPUInterruptController::initCPUInterruptController -> ml_set_max_cpus). Until Beringia has its own IOCPU

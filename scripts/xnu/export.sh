@@ -7,6 +7,12 @@ set -euo pipefail
 
 cd "$BERINGIA_XNU_SRC"
 [ -z "$(git status --porcelain)" ] || die "uncommitted changes in $BERINGIA_XNU_SRC"
+# prepare.sh copies xnu/include/beringia/*.h over the tree's EXTERNAL_HEADERS/beringia/: the committed copies must
+# match, or a fresh prepare leaves modified files behind and this script refuses to run on that tree.
+for h in "$BERINGIA_ROOT"/xnu/include/beringia/*.h; do
+	cmp -s "$h" "EXTERNAL_HEADERS/beringia/$(basename "$h")" ||
+		die "EXTERNAL_HEADERS/beringia/$(basename "$h") differs from xnu/include/beringia/$(basename "$h"): commit the shared header in $BERINGIA_XNU_SRC first"
+done
 out=$BERINGIA_ROOT/xnu/patches
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

@@ -10,9 +10,26 @@ handles a missing property. With this, AppleImage4, AMFI, Sandbox,
 Quarantine, AppleSystemPolicy and AppleKeyStore all start, and XNU
 reaches the root-device wait with the security stack loaded.
 ---
+ iokit/Kernel/IONVRAM.cpp         | 5 +++++
  iokit/Kernel/IORegistryEntry.cpp | 6 ++++++
- 1 file changed, 6 insertions(+)
+ 2 files changed, 11 insertions(+)
 
+diff --git a/iokit/Kernel/IONVRAM.cpp b/iokit/Kernel/IONVRAM.cpp
+index b4db0d9..f090845 100644
+--- a/iokit/Kernel/IONVRAM.cpp
++++ b/iokit/Kernel/IONVRAM.cpp
+@@ -1815,6 +1815,11 @@ IODTNVRAM::copyProperty(const char *aKey) const
+ 	OSSharedPtr<const OSSymbol> keySymbol;
+ 	OSSharedPtr<OSObject>       theObject;
+ 
++	/* BERINGIA: as IORegistryEntry::getProperty(const char *): a null name is "no such property" (AppleImage4's
++	 * expert dump asks with one), not OSSymbol::withCString(NULL). */
++	if (!aKey) {
++		return nullptr;
++	}
+ 	keySymbol = OSSymbol::withCString(aKey);
+ 	if (keySymbol != nullptr) {
+ 		theObject = copyProperty(keySymbol.get());
 diff --git a/iokit/Kernel/IORegistryEntry.cpp b/iokit/Kernel/IORegistryEntry.cpp
 index 9a6a6bb..ef6b6ed 100644
 --- a/iokit/Kernel/IORegistryEntry.cpp

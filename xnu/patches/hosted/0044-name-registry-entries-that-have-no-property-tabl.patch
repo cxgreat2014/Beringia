@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 15:14:37 +0800
+Subject: [PATCH] hosted: name registry entries that have no property table
+
+Three accessors already had to tolerate a registry entry with a NULL
+property table (getProperty, dictionaryWithProperties) and the next one,
+serializeProperties, panicked the kernel from softwareupdated
+(io_registry_entry_get_properties_bin_buf). Patching one accessor at a
+time hides which entry it is. Hosted, every accessor that would
+dereference the missing table now reports the entry (class, address,
+registry id; the first report with a backtrace) and behaves as for an
+empty table; setProperty gives the entry its table, as init() would
+have. The entry itself is the bug to fix.
+---
+ iokit/Kernel/IORegistryEntry.cpp | 64 +++++++++++++++++++++++++++++++-
+ 1 file changed, 62 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/IORegistryEntry.cpp b/iokit/Kernel/IORegistryEntry.cpp
+index 5685e43..fd18e80 100644
+--- a/iokit/Kernel/IORegistryEntry.cpp
++++ b/iokit/Kernel/IORegistryEntry.cpp
+@@ -41,6 +41,35 @@
+ #include <machine/atomic.h>
+ 
+ #include "IOKitKernelInternal.h"
++#include <libkern/OSDebug.h>
++
++/*
++ * BERINGIA: bring-up. Some registry entry reaches the property accessors with no property table at all (an IOService
++ * that was attached without ever being init()ed). Hosted, every accessor that would dereference the missing table
++ * reports the entry and then behaves as for an empty table, so the culprit is named on the console instead of
++ * surfacing as a NULL dereference in whichever accessor a daemon happens to call first (dictionaryWithProperties in
++ * ramrod, serializeProperties in softwareupdated, ...). The first report carries a backtrace.
++ */
++static bool
++beringia_no_property_table(const IORegistryEntry * entry, const char * where)
++{
++	static SInt32 reports;
++	SInt32 n;
++
++	if (entry->getPropertyTable()) {
++		return false;
++	}
++	if (beringia_hosted() && (n = OSIncrementAtomic(&reports)) < 16) {
++		if (n == 0) {
++			OSReportWithBacktrace("BERINGIA: %s: %s %p (registry id %#llx) has no property table",
++			    where, entry->getMetaClass()->getClassName(), entry, const_cast<IORegistryEntry *>(entry)->getRegistryEntryID());
++		} else {
++			printf("BERINGIA: %s: %s %p (registry id %#llx) has no property table\n",
++			    where, entry->getMetaClass()->getClassName(), entry, const_cast<IORegistryEntry *>(entry)->getRegistryEntryID());
++		}
++	}
++	return true;
++}
+ 
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+@@ -545,6 +574,14 @@ IORegistryEntry::serializeProperties( OSSerialize * s ) const
+ {
+ //    setProperty( getRetainCount(), 32, "__retain" );
+ 
++	if (beringia_hosted() && beringia_no_property_table(this, "serializeProperties")) {
++		OSDictionary * empty = OSDictionary::withCapacity(1);
++		bool ok = empty && empty->serialize(s);
++
++		OSSafeReleaseNULL(empty);
++		return ok;
++	}
++
+ 	PLOCK;
+ 	OSCollection *snapshotProperties = getPropertyTable()->copyCollection();
+ 	PUNLOCK;
+@@ -561,6 +598,10 @@ IORegistryEntry::serializeProperties( OSSerialize * s ) const
+ OSArray *
+ IORegistryEntry::copyPropertyKeys(void) const
+ {
++	if (beringia_hosted() && beringia_no_property_table(this, "copyPropertyKeys")) {
++		return OSArray::withCapacity(1);
++	}
++
+ 	PLOCK;
+ 	OSArray * keys = getPropertyTable()->copyKeys();
+ 	PUNLOCK;
+@@ -575,7 +616,7 @@ IORegistryEntry::dictionaryWithProperties( void ) const
+ 
+ 	/* BERINGIA: some hosted nubs never get a property table; matching must see an empty dictionary, not a
+ 	 * NULL dereference (io_service_get_matching_service walks every service). */
+-	if (!getPropertyTable()) {
++	if (beringia_no_property_table(this, "dictionaryWithProperties")) {
+ 		return OSDictionary::withCapacity(1);
+ 	}
+ 
+@@ -741,7 +782,7 @@ IORegistryEntry::getProperty( const OSSymbol * aKey) const
+ 	OSObject * obj;
+ 
+ 	/* BERINGIA: a nub with no property table has no properties; return NULL instead of calling getObject on NULL. */
+-	if (!getPropertyTable()) {
++	if (beringia_no_property_table(this, "getProperty")) {
+ 		return NULL;
+ 	}
+ 	PLOCK;
+@@ -754,6 +795,9 @@ IORegistryEntry::getProperty( const OSSymbol * aKey) const
+ void
+ IORegistryEntry::removeProperty( const OSSymbol * aKey)
+ {
++	if (beringia_hosted() && beringia_no_property_table(this, "removeProperty")) {
++		return;
++	}
+ 	PLOCK;
+ 	getPropertyTable()->removeObject( aKey );
+ 	PUNLOCK;
+@@ -777,6 +821,22 @@ IORegistryEntry::setProperty( const OSSymbol * aKey, OSObject * anObject)
+ 	OSCollection *coll = OSDynamicCast(OSCollection, anObject);
+ 	bool makeImmutable = (coll && inPlane());
+ 
++	if (beringia_hosted() && beringia_no_property_table(this, "setProperty")) {
++		/* as init() would have: give the entry its (first) property table */
++		OSDictionary * table = OSDictionary::withCapacity(kIORegCapacityIncrement);
++
++		if (!table) {
++			return false;
++		}
++		PLOCK;
++		if (!fPropertyTable) {
++			fPropertyTable = table;
++			table = NULL;
++		}
++		PUNLOCK;
++		OSSafeReleaseNULL(table);
++	}
++
+ 	PLOCK;
+ 	if (makeImmutable) {
+ 		coll->setOptions( OSCollection::kMASK, OSCollection::kImmutable );

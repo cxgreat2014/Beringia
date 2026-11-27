@@ -12,22 +12,23 @@ fileset kernel collection never takes that path. Until corecrypto is
 registered, mix the address with the salt instead; nothing outside the
 kernel runs yet to see the result.
 ---
- osfmk/vm/vm_kern.c | 15 +++++++++++++++
- 1 file changed, 15 insertions(+)
+ osfmk/vm/vm_kern.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
 
 diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
-index 6289f17..df89c83 100644
+index 6289f17..45da009 100644
 --- a/osfmk/vm/vm_kern.c
 +++ b/osfmk/vm/vm_kern.c
-@@ -88,6 +88,7 @@
+@@ -88,6 +88,8 @@
  
  #include <libkern/OSDebug.h>
  #include <libkern/crypto/sha2.h>
 +#include <libkern/crypto/crypto_internal.h>
++#include <beringia_hosted.h>
  #include <libkern/section_keywords.h>
  #include <sys/kdebug.h>
  #include <sys/kdebug_triage.h>
-@@ -4649,6 +4650,20 @@ vm_kernel_addrhash_internal(vm_offset_t addr, uint64_t salt)
+@@ -4649,6 +4651,20 @@ vm_kernel_addrhash_internal(vm_offset_t addr, uint64_t salt)
  
  	addr = VM_KERNEL_STRIP_PTR(addr);
  
@@ -37,7 +38,7 @@ index 6289f17..df89c83 100644
 +	 * an object address here. A fileset kernel collection never takes that path. Until corecrypto is there, mix the
 +	 * address with the salt instead: nothing outside the kernel runs yet to see the result.
 +	 */
-+	if (g_crypto_funcs == NULL) {
++	if (beringia_hosted() && g_crypto_funcs == NULL) {
 +		addr ^= salt;
 +		addr ^= addr >> 33;
 +		addr *= 0xff51afd7ed558ccdULL;

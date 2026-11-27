@@ -40,3 +40,10 @@ hosted/0035-unblock-hw-osenvironment-when-there-is-no-nvram-.patch
 hosted/0036-log-fatal-userspace-exception-details-bring-up-a.patch
 hosted/0037-map-only-the-carve-outs-in-the-physmap-p2.patch
 hosted/0038-return-an-empty-property-dictionary-for-nubs-wit.patch
+hosted/0039-hide-an-unmounted-preboot-directory-from-statfs6.patch
+hosted/0040-add-a-boot-argument-to-suppress-user-core-dumps.patch
+hosted/0041-publish-the-platform-uuid-without-an-nvram-contr.patch
+hosted/0042-include-process-identity-in-thread-dumps.patch
+hosted/0043-sync-the-shared-abi-header-with-the-loader-s-cop.patch
+hosted/0044-name-registry-entries-that-have-no-property-tabl.patch
+hosted/0045-no-platform-nub-for-the-nvram-service.patch
