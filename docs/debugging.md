@@ -44,6 +44,13 @@ One XNU at a time: `boot.sh` and `stop.sh` serialize on `/run/beringia/run.lock`
 default 600), and `boot.sh` refuses to start while the modules of an earlier run are still loaded. End that run with
 `stop.sh` first; its evidence stays in its own run directory.
 
+`stop.sh` ends a run the way a power key would, not by pulling the plug: it writes `1` to the module parameter
+`shutdown`, the kernel sends launchd SIGTERM (patch 0048), launchd shuts the system down — logd flushes its buffer,
+the volumes are unmounted — and calls `reboot(2)`, which reaches `halt_all_cpus`; the module's `state` parameter then
+reads `halted`. If that does not happen in `BERINGIA_SHUTDOWN_WAIT` seconds (default 60), `stop.sh` writes
+`escalate`, and the kernel runs the BSD shutdown itself (`reboot_kernel`, `BERINGIA_ESTOP_WAIT`, default 30), before
+it unloads the modules anyway. `BERINGIA_SHUTDOWN=0` unloads at once, for a run that is known to be wedged.
+
 `LINUX_KDIR` is the WSL2 kernel tree you built (`scripts/host/wsl-kernel.sh`). Paths are in `local.env` (git-ignored;
 absolute paths so they also work under sudo/root).
 

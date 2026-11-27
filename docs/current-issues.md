@@ -26,10 +26,14 @@ there is no input. How each blocker on the way was found and fixed:
   screen**. Run `20261128-042946` narrowed it: `Installer Progress` releases its shield window 20 s into the boot;
   SkyLight starts its `Software compositor`; and while WindowServer builds the CoreDisplay framebuffer, IOPresentment
   reports `Error: Unable to acquire map`, followed by a CoreDisplay error breadcrumb from
-  `CoreDisplay::Framebuffer::Framebuffer`. WindowServer also cannot register `com.apple.CARenderServer` (`Operation
-  already in progress`: the job's plist already owns that name), and the display ID stays 0. No GPU, no Metal device.
-  Without BeringiaFramebuffer, IONDRVSupport's `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps
-  that display offline.
+  `CoreDisplay::Framebuffer::Framebuffer`. Disassembling the display frameworks shows that the software compositor
+  still scans out through the CoreDisplay DisplayPipe, whose presentation needs an
+  AppleGPUWrangler GPU with an `IOAccelerator` under an `IOPCIDevice`; a bare IOFramebuffer has no such identity
+  (GPUWrangler: `(NG) ... pci 0 ... accel 0`), and its VRAM is never mapped by WindowServer. Apple's own software
+  path, `AppleParavirtGPU`, is a fake PCI GPU. So the next step is a virtual `IOPCIDevice` with a minimal
+  `IOAccelerator` (BeringiaPCI). WindowServer also cannot register `com.apple.CARenderServer` (`Operation already in
+  progress`: the job's plist already owns that name), and the display ID stays 0. Without BeringiaFramebuffer,
+  IONDRVSupport's `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps that display offline.
 - The image had lost **23 427 hard-linked file names** in extraction (powerd's launchd plist among them, so powerd
   never ran); `tools/disk/mtree.py` restored them from the OTA's mtree. bluetoothd is disabled in the image for now:
   with no Bluetooth controller it never answers, and its clients (Language Chooser) waited forever.
