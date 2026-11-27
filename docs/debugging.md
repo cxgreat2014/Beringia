@@ -25,13 +25,17 @@ running after the script returns. Settings (in `local.env` or the environment; s
 | `BERINGIA_KERNEL` | kernel/prelinked-kernel image to install and boot (default: the XNU build output). |
 | `BERINGIA_RAMDISK` | optional HFS+/APFS image loaded as memdev `pmd0`, with `rd=md0` appended. |
 | `BERINGIA_DISK` | optional raw host file exposed through BeringiaDisk as block unit 0. For the recovery container, add `rd=disk0` to `BERINGIA_BOOT_ARGS`. |
+| `BERINGIA_OSK_FILE` | the DSMOS key from your own Mac, for BeringiaSMC ([setup/macos-assets.md](setup/macos-assets.md)); `meta.txt` records only whether one was supplied. |
 | `BERINGIA_WIN_DIR` | e.g. `/mnt/c/Users/<you>/xnu-work`: per-run directories and the watchdog's marker live here. |
 | `BERINGIA_WATCH_MINUTES` | how long the watchdog stays armed for the run (default 60). |
 | `BERINGIA_FAILFAST` | default 1: `softlockup_panic`, `panic_on_rcu_stall` and an RCU stall timeout of `BERINGIA_STALL_SECS` (20). A wedged CPU then ends in a panic with backtraces on the console instead of a silent hang. |
 | `BERINGIA_LINUX_CPU` | the Linux CPU that runs hosted CPU 0 (default 1). |
 
 It also sets `kernel.panic_on_oops=0` (an oops in a module thread does not reset the VM) and the console log level to
-7, so Beringia's `pr_info` lines reach the console and therefore the host-side console log.
+7, so Beringia's `pr_info` lines reach the console and therefore the host-side console log. The values these settings
+had before the first boot are saved in `/run/beringia/host-settings`, and `stop.sh` puts them back (otherwise a later,
+unrelated stall would still reset the whole VM). `boot.sh` builds the modules as the owner of the tree even when it
+runs as root.
 
 `LINUX_KDIR` is the WSL2 kernel tree you built (`scripts/host/wsl-kernel.sh`). Paths are in `local.env` (git-ignored;
 absolute paths so they also work under sudo/root).
@@ -157,8 +161,13 @@ evidence (below). Afterwards, read the run directory (the console log first), th
 
 `scripts/run/wsl-watchdog.ps1` (Windows PowerShell, a scheduled task) protects **armed runs** only:
 
-- `boot.sh` arms it by writing `$BERINGIA_WIN_DIR/run/armed` (run id, run directory, distro, expiry) just before it
-  loads the modules; `stop.sh` disarms it; an armed run expires after `BERINGIA_WATCH_MINUTES`.
+- `boot.sh` arms it by writing `$BERINGIA_WIN_DIR/run/armed` (run id, run directory, distro, expiry, stop script)
+  just before it loads the modules (and disarms it again if loading fails); `stop.sh` disarms it, but only once both
+  modules are really unloaded.
+- **expired** (after `BERINGIA_WATCH_MINUTES`): the watchdog runs the run's `stop.sh` itself (as root, an orderly
+  unload) and then disarms. It must: its 10-second probes are what keep an otherwise idle WSL VM running, and once
+  they stop WSL shuts the VM down within a minute or so, which would kill a still-running XNU with its disk image
+  mounted read-write. `stop.sh` finds an expired run's directory through `$BERINGIA_WIN_DIR/run/last`.
 - While nothing is armed it does nothing at all: it never runs `wsl.exe`, so it neither keeps the VM alive nor starts
   it again after a crash.
 - While a run is armed it polls every 10 s: it mirrors the host-side console log into the run directory, checks that

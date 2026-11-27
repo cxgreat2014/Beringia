@@ -87,8 +87,10 @@ macOS deliberately executes `sidt` in userspace. Linux had left CR4.UMIP set (`0
 dump includes bit `0x800`), so that instruction raised #GP. It was not a NULL `memcpy` argument as the fault address
 alone suggested.
 
-Commit `403fa76` clears CR4.UMIP on **every** entry to the foreign world in `world_asm.S`. The state safety net
-restores Linux's CR4, including UMIP, on exit.
+Commit `f661243` clears CR4.UMIP on **every** entry to the foreign world in `world_asm.S`. (That commit left putting
+Linux's UMIP back to the state safety net, which then reported our own change as "the foreign kernel changed CR4" on
+every run and did nothing at all with `statecheck=0`; since the 2026-11-27 audit `to_linux` saves and restores Linux's
+CR4 unconditionally, see [../audit/2026-11-27-m5-session-audit.md](../audit/2026-11-27-m5-session-audit.md).)
 
 The same boot also needed hosted patch 0038: `dictionaryWithProperties()` now returns an empty dictionary for a nub
 with no property table. Registry matching walks every service and previously dereferenced the missing table.

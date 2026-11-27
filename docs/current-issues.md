@@ -6,32 +6,46 @@ directory (`$BERINGIA_WIN_DIR/runs/<id>/`, see [debugging.md](debugging.md)) tha
 [architecture.md](architecture.md); for milestones, [../ROADMAP.md](../ROADMAP.md). The detailed M5 experiment log is
 [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
 
-## Where XNU gets to today (2026-11-27)
+## Where XNU gets to today (2026-11-27, after the audit)
 
-**M4's boot path works** (security stack, 14-minute clean run), and **M5 has real Apple services running from a
-host-backed disk** — but there is no shell, no installed full system, and no GUI yet.
+**The full macOS 26 system boots past launchd's early boot and runs ~130 Apple daemons from a 40 GiB APFS system
+image on BeringiaDisk** (run `20261127-153054`), with no kernel panic and no host warning. There is still no
+display, no input, no shell and no GUI.
 
-- The legacy prelinked kernel currently links **35 kexts**: 34 from the KDK closure (security, storage and APFS)
-  plus `BeringiaDisk`. `tools/kc/deps.py` computes the closure, honouring `OSBundleLibraries_x86_64`.
-- `BeringiaDisk` exposes a raw host file as an `IOBlockStorageDevice` through the block-info/read/write/flush host
-  calls. With `rd=disk0`, Apple's `x86_64SURamDisk.dmg` is found as boot media and its APFS volume mounts.
-- The recovery **launchd completes the ignition sequence and starts `ramrod` and `syslogd`** (run
-  `20261127-012220`). This validates exec, dyld, initial IPC and service startup, not a complete macOS install.
-- `ramrod` then reports `MSU 1008 (an error occurred finding the target volume)` and reboots deliberately. That is
-  the current stopping point: only the recovery image is present; there is no target System volume.
-- A self-written unsigned `/sbin/launchd` is rejected by AMFI ("The system only allows platform binaries"). The
-  current successful userland is therefore Apple-signed recovery software.
-- The full-system OTA tree is extracted, but its runtime is incomplete: `libSystem.B.dylib`,
-  `System/Library/dyld/dyld_shared_cache_x86_64`, OS cryptex contents and a full-system static trust cache are still
-  required before a normal multi-user boot.
+- The legacy prelinked kernel links **37 kexts**: the KDK closure (security, storage, APFS, AppleSMC, DSMOS) plus
+  `BeringiaDisk` and `BeringiaSMC`. The list is `$BERINGIA_BUILD/kc/kexts.txt`.
+- The system image (`$BERINGIA_ASSETS/system.apfs.img`) is a **single APFS volume** with the 25A353 OTA system tree
+  and its OS-cryptex runtime (dyld shared cache, libSystem). It was assembled by hand during M5 with apfsprogs
+  `mkapfs` and the experimental linux-apfs-rw write support; **no script in this repository rebuilds it yet**, and
+  once macOS has mounted it read-write apfsprogs' `apfsck` no longer understands it ("Cloneinfo id epoch: not
+  supported"). Keep a copy before experiments.
+- launchd completes `Early boot complete. Continuing system boot.`; kernelmanagerd checks in (`KextLog:
+  kernelmanagerd is active`), so deferred driver matching runs. The previous blockers and their fixes:
+  - shared cache refused (`vnode is not SIP-protected`): the loader set `csrActiveConfig` without
+    `kBootArgsFlagCSRActiveConfig`; now `0x6f` with the flag (the image's files lack `SF_RESTRICTED`, so
+    `CSR_ALLOW_UNRESTRICTED_FS` is what is needed);
+  - CarbonCore FileIDTree abort: `/System/Volumes/Preboot` is a plain directory on the root volume (hosted patch
+    0039 hides it from `statfs64` with `beringia_hide_preboot=1`; a real multi-volume container is the proper fix);
+  - DSMOS waiting for an SMC: `BeringiaSMC`;
+  - **`gethostuuid()` blocked configd, opendirectoryd, remoted and kernelmanagerd**: the platform UUID must come from
+    `/efi/platform/system-id` (the first attempt, `/options/platform-uuid`, is hidden by the NVRAM stub and never
+    worked);
+  - **a registry entry without a property table** (an `IOPlatformDevice` made from the NVRAM stub) panicked the kernel
+    as soon as softwareupdated read the registry: hosted patch 0045.
+- **WindowServer starts but waits forever in `IOKitWaitQuiet()`**: something keeps the IOKit registry busy. Even when
+  that clears, there is no framebuffer and no input device, so no GUI is possible yet.
+- Crash loops: `timed`, `pkd` and `coreduetd` ("Too many corpses being created"); `fskitd` is throttled after exit;
+  `data-protection` (`seputil`, arm64e only) fails with `Bad CPU type`, which is expected on Intel.
+- A self-written unsigned `/sbin/launchd` is rejected by AMFI ("The system only allows platform binaries").
 
 ## Important fixes in this round
 
 | Problem | Root cause | Fix |
 |---|---|---|
 | launchd waited forever after the ignition banner | `hw.osenvironment` is released by `registerNVRAMController`, which the hosted NVRAM stub bypasses | hosted patch 0035: BeringiaPlatform calls `sysctl_unblock_osenvironment()` |
-| launchd died with `EXC_BAD_ACCESS`, code `0xd 0` after ignition | Linux left **CR4.UMIP** set; macOS executes `sidt` in userspace in `__os_cpu_number`, which then raises #GP | `world_asm.S` clears CR4.UMIP on every foreign entry (commit `403fa76`); Linux's CR4 is restored on exit |
-| registry matching crashed in `ramrod` | `dictionaryWithProperties()` dereferenced a missing property table | hosted patch 0038 returns an empty dictionary |
+| launchd died with `EXC_BAD_ACCESS`, code `0xd 0` after ignition | Linux left **CR4.UMIP** set; macOS executes `sidt` in userspace in `__os_cpu_number`, which then raises #GP | `world_asm.S` clears CR4.UMIP on every foreign entry (commit `f661243`); since the audit, `to_linux` restores Linux's saved CR4 unconditionally |
+| registry matching crashed in `ramrod`; later softwareupdated panicked the kernel in `serializeProperties` | an `IOPlatformDevice` without a property table: `createNubs` made a platform nub from the IODTNVRAM stub, whose `dictionaryWithProperties()` is NULL | patch 0038 was a per-accessor workaround; patch 0044 names such entries, patch 0045 (BeringiaPlatform does not make a nub of the NVRAM service) removes the cause |
+| configd, opendirectoryd, remoted and kernelmanagerd blocked in `gethostuuid()` | x86 derives `IOPlatformUUID` from `/efi/platform/system-id`; the loader's `/options/platform-uuid` is hidden by the NVRAM stub | the loader supplies `system-id`; patch 0041 publishes the UUID |
 | XNU could write the host's RAM through its physmap | every physical page up to `phys_top` was mapped writable | hosted patch 0037 (P2): only conventional EFI ranges, exactly the carve-outs, are mapped |
 | no disk for a full system | RAM-disk images are limited by the carve-out | `BeringiaDisk` and the loader's `disk=PATH` backend, with `BERINGIA_DISK` forwarded by `boot.sh` |
 
@@ -52,10 +66,11 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 
 ## Safety nets now in place
 
-- **State safety net** (`beringia_host.ko statecheck=1`, default): after every exit from the foreign world, CR4, CR8,
-  DR7, IA32_PAT, EFER, IA32_APIC_BASE, DEBUGCTL, MTRR_DEF_TYPE, MISC_ENABLE and the PMU controls are compared with
-  their values at entry; differences are logged once and restored. A changed IA32_APIC_BASE cannot be repaired and
-  ends the run.
+- **State safety net** (`beringia_host.ko statecheck=1`, default, load-time only): after every exit from the foreign
+  world, CR8, DR7, IA32_PAT, EFER, IA32_APIC_BASE, DEBUGCTL, MTRR_DEF_TYPE, MISC_ENABLE and the PMU controls are
+  compared with their values at entry; differences are logged once and restored. A changed IA32_APIC_BASE, or an MSR
+  that cannot be written back, ends the run. CR4 is restored by the switch itself on every exit (it clears UMIP for
+  the foreign world); the net reports if the foreign kernel changed its own copy.
 - **Restricted physmap**: only the carve-outs are mapped; an access to unrelated host RAM faults instead of silently
   corrupting it.
 - **Self-test** covers sleeping inside a host call (`selftest_sleep`) and the safety net (`selftest_tamper`).
@@ -68,23 +83,28 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 
 | Area | State |
 |---|---|
-| Userland | Recovery launchd and initial services run. No interactive shell, console login, multi-user boot or GUI. |
-| Full-system runtime | The OTA base system alone is insufficient; the Intel runtime/cryptex and full static trust cache are still needed. |
-| kexts | A legacy prelinked kernel (35 kexts in the current disk build). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. |
+| Userland | The full system's launchd and ~130 daemons run. No interactive shell, console login or GUI; WindowServer waits in `IOKitWaitQuiet()`. |
+| System image | One APFS volume (role 0), not the System/Data/Preboot/VM container macOS expects; hand-built, not reproducible from this repository yet; no `SF_RESTRICTED` flags (hence `CSR_ALLOW_UNRESTRICTED_FS`). DroidVM found single-volume and union layouts a source of daemon crash loops and moved to a real multi-volume container. |
+| kexts | A legacy prelinked kernel (37 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only. |
 | trust caches | `trust_cache_init` succeeds with the img4 interface; no full-system static trust cache is supplied by the loader yet. Patch 0029 remains as the no-image4 fallback. |
 | kalloc_type | Degraded to size-based data zones (upstream LLVM has no `__builtin_xnu_type_summary`). Kext views use the external fallback in the static format; no hang has been observed. |
-| Block I/O | BeringiaDisk mounts APFS and reads successfully. Full write correctness and the read-only fallback are not yet validated; flush orders host file operations but is not an `fsync` to stable storage. |
+| Block I/O | BeringiaDisk mounts APFS read-write. It reports a volatile write cache and a flush is an `fsync` of the image on the host; force-unit-access writes are not honoured individually. The read-only fallback is not validated. |
 | LAPIC | A RAM page with no-op init; timer and IPIs go through the host. |
 | NMI / #MC | **Not forwarded yet**: in the foreign world they enter XNU's own handlers. |
 | NVRAM | IODTNVRAM is a stub; IONVRAM is announced as ready. NVRAM writes from ramrod report unsupported function. |
-| SMP | One hosted CPU. The pending word is atomic on both sides already. |
+| SMP | One hosted CPU. The pending word is atomic on both sides already. The block host call reads its request once, and the thread dump refuses to run with more than one CPU (its walk takes no lock). |
+| Display / input | None. WindowServer has no framebuffer. Note for that work: XNU runs under Linux's PAT, so its WT mappings (PA1) are write-combining and its WC mappings (PA6) are UC- (hosted patch 0025 leaves the host PAT alone). |
 | Linux latency | While XNU runs with interrupts off, that Linux CPU takes no interrupts. Measure before SMP. |
 
 ## Next steps, in order
 
-1. Complete the matching Intel runtime and build the System/Data volumes; boot them through BeringiaDisk and record
-   the next concrete userland checkpoint.
-2. Add console input and reach a usable shell; validate block writes and durable flush before relying on a writable
-   system volume.
-3. Then networking, display/input and WindowServer. Keep NMI/#MC forwarding, SMP and `tools/kc` CI tests as separate
-   hardening work rather than claiming they are done.
+1. Find what keeps the IOKit registry busy (WindowServer's `IOKitWaitQuiet()`), and triage the timed/pkd/coreduetd
+   crash loops.
+2. Make the system image reproducible from this repository (`tools/disk/`), as a real APFS container (System, Data,
+   Preboot, VM) with `SF_RESTRICTED` on the system files, so the Preboot hack and `CSR_ALLOW_UNRESTRICTED_FS` can go;
+   keep a pristine copy and boot from a working copy.
+3. Console input and a shell, then a framebuffer (`BeringiaFramebuffer`, IOFramebuffer, software rendering) and
+   input for WindowServer. Keep NMI/#MC forwarding, SMP and `tools/kc` CI tests as separate hardening work.
+
+The 2026-11-27 audit of the M5 work, with every finding and what was done about it, is
+[audit/2026-11-27-m5-session-audit.md](audit/2026-11-27-m5-session-audit.md).
