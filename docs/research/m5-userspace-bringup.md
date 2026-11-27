@@ -215,15 +215,14 @@ for k in BeringiaDisk BeringiaSMC BeringiaFramebuffer; do
   kexts+=("$(realpath --relative-to="$BERINGIA_KDK_EXTENSIONS" "$BERINGIA_BUILD/kexts/$k/$k.kext")")
 done
 scripts/kc/build.sh "${kexts[@]}"
-sudo env BERINGIA_NO_BUILD=1 BERINGIA_KERNEL="$BERINGIA_BUILD/kc/prelinkedkernel" \
-  BERINGIA_DISK="$BERINGIA_ASSETS/system.apfs.img" \
-  BERINGIA_BOOT_ARGS="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1 rd=disk0 beringia_hide_preboot=1 beringia_no_coredump=1" \
-  scripts/run/boot.sh 180
-sudo scripts/run/stop.sh
+# local.env: BERINGIA_GOLDEN (the image, chattr +i), BERINGIA_KERNEL="$BERINGIA_BUILD/kc/prelinkedkernel",
+# BERINGIA_BOOT_ARGS="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1 rd=disk0 beringia_hide_preboot=1 beringia_no_coredump=1"
+sudo scripts/run/experiment.sh --note "full system" --shots 60,120,180 --dump WindowServer
 ```
 
-Add `beringia_busy_report=1` to see what holds the registry busy, `kextlog=0x2f` for kext load requests. The image is
-mounted read-write by macOS: copy it before experiments.
+Add `beringia_busy_report=1` to see what holds the registry busy, `kextlog=0x2f` for kext load requests. macOS
+mounts the image read-write, so every run boots its own copy of the golden image ([../debugging.md](../debugging.md),
+"Experiments"); `boot.sh` with `BERINGIA_GOLDEN` set does the same for an interactive run.
 
 Two changes to the image are part of the 2026-11-28 state (section 7), until the image builder does them: the lost
 hard links restored with `tools/disk/mtree.py check MTREE ROOT --fix-hardlinks` (on the image mounted read-write, or on

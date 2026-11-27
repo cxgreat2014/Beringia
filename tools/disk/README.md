@@ -27,3 +27,18 @@ itself mounted read-write with linux-apfs-rw.
 
 Decoding the IM4P needs an LZFSE decoder (Apple's open-source lzfse, BSD-3-Clause); extracting `mtree.txt` from the
 archive is a few lines over the AA01 format. Both belong in the image builder that is still to be written (M6).
+
+## overrides.sh, launchd-disabled.py: bring-up changes to the image
+
+`sudo tools/disk/overrides.sh [--undo] [IMAGE]` makes the changes a machine without Bluetooth hardware needs (its
+header says what and why); it is idempotent and `--undo` reverts it. The golden image is `chattr +i`: lift that for
+the change and put it back after.
+
+`tools/disk/launchd-disabled.py [--undo] LABEL... ROOT` disables launchd jobs through launchd's own override file
+(`/private/var/db/com.apple.xpc.launchd/disabled.plist`) on a mounted volume, without touching the jobs' plists. With
+the mount point last it fits `scripts/run/experiment.sh --image-patch`, which tries a change on one run's copy only:
+
+```sh
+sudo scripts/run/experiment.sh --note "without Installer Progress" \
+  --image-patch "python3 -I tools/disk/launchd-disabled.py com.apple.InstallerProgress"
+```

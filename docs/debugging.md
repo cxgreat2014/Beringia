@@ -25,6 +25,8 @@ running after the script returns. Settings (in `local.env` or the environment; s
 | `BERINGIA_KERNEL` | kernel/prelinked-kernel image to install and boot (default: the XNU build output). |
 | `BERINGIA_RAMDISK` | optional HFS+/APFS image loaded as memdev `pmd0`, with `rd=md0` appended. |
 | `BERINGIA_DISK` | optional raw host file exposed through BeringiaDisk as block unit 0. For the recovery container, add `rd=disk0` to `BERINGIA_BOOT_ARGS`. |
+| `BERINGIA_GOLDEN` | with no `BERINGIA_DISK`: boot a fresh copy of this image, made by `scripts/run/disk-copy.sh` (see "Experiments" below). |
+| `BERINGIA_RUN_ID`, `BERINGIA_NOTE` | the run's id (default: the date and time) and a note for `meta.txt`; `experiment.sh` sets both. |
 | `BERINGIA_OSK_FILE` | the DSMOS key from your own Mac, for BeringiaSMC ([setup/macos-assets.md](setup/macos-assets.md)); `meta.txt` records only whether one was supplied. |
 | `BERINGIA_FB` | the boot framebuffer, `WIDTHxHEIGHT` at 32 bpp (default: the loader's, 1280x800; empty: none). See "The screen" below. |
 | `BERINGIA_WIN_DIR` | e.g. `/mnt/c/Users/<you>/xnu-work`: per-run directories and the watchdog's marker live here. |
@@ -37,6 +39,10 @@ It also sets `kernel.panic_on_oops=0` (an oops in a module thread does not reset
 had before the first boot are saved in `/run/beringia/host-settings`, and `stop.sh` puts them back (otherwise a later,
 unrelated stall would still reset the whole VM). `boot.sh` builds the modules as the owner of the tree even when it
 runs as root.
+
+One XNU at a time: `boot.sh` and `stop.sh` serialize on `/run/beringia/run.lock` (`BERINGIA_LOCK_WAIT` seconds,
+default 600), and `boot.sh` refuses to start while the modules of an earlier run are still loaded. End that run with
+`stop.sh` first; its evidence stays in its own run directory.
 
 `LINUX_KDIR` is the WSL2 kernel tree you built (`scripts/host/wsl-kernel.sh`). Paths are in `local.env` (git-ignored;
 absolute paths so they also work under sudo/root).
@@ -55,6 +61,37 @@ sudo scripts/run/stop.sh
 Expected evidence includes `BeringiaDisk: ... blocks of 512 bytes`, `Got boot device`, `BSD root: disk0`, and an
 APFS `mount-complete` line. The M5 experiment log and KC build commands are in
 [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
+
+## Experiments: one command per run
+
+macOS writes to its system disk, so a run changes the image (logs, caches, first-boot state) and the next run would
+start from different conditions. Keep one **golden image** that is never booted, and boot a copy of it each time:
+
+```sh
+sudo chattr +i "$BERINGIA_GOLDEN"           # once: not even root writes to it by accident
+# per run (boot.sh does this itself when BERINGIA_GOLDEN is set and BERINGIA_DISK is not):
+sudo scripts/run/disk-copy.sh RUN_ID        # sparse copy to $BERINGIA_WORK/runs/RUN_ID/system.img, prints the path
+```
+
+`disk-copy.sh` keeps the newest `BERINGIA_KEEP_COPIES` (3) copies and deletes older ones; the evidence of every run
+stays in its run directory. To change the image, change the golden one deliberately (`chattr -i`, mount, change,
+`chattr +i`) and say so in the next run's note.
+
+`scripts/run/experiment.sh` runs a whole experiment as one command (as root): copy the golden image, optionally patch
+the copy, boot, take screenshots, dump the threads of chosen processes with their user stacks, stop, harvest macOS's
+own logs and summarize:
+
+```sh
+sudo scripts/run/experiment.sh --note "what this run tests" --shots 60,120,180 \
+  --dump WindowServer,loginwindow --grep 'CARenderServer|Mode has dimensions'
+sudo scripts/run/experiment.sh --image-patch ./my-change.sh ...   # runs "./my-change.sh MOUNTPOINT" on the copy
+```
+
+Everything lands in the run directory: `fb-<T>s.png`, `dump-<P>.txt` (and `dump-<P>-sym.txt`, named from the dyld
+shared cache), `macos-logs/`, and `summary.txt` / `summary.json` from `tools/debug/run-summary.py`: the share of lit
+pixels and the colour count of each screenshot, kernel panics and Linux warnings, watchdog incidents, crash reports by
+process, launchd's exits by service, the unified log's top writers and the messages matching `--grep`. A panic ends
+the screenshot loop early. `--keep-running` leaves XNU up for interactive work.
 
 ## Where the console output goes
 
@@ -153,9 +190,8 @@ The cache's local symbols are not in the OTA, so a frame in a static function sh
 symbol. Frames in the main executable show as `main+offset` (offset from its Mach-O header). The block hint in the
 thread line says how the kernel side waits (2 a Mach receive, 6 a semaphore, 15 an idle workqueue thread).
 
-Some binaries (loginwindow, Finder, Dock and the other DSMOS-protected ones) are encrypted on disk and decrypted only
-in memory. `peek:PID:ADDR:LEN` (at most 4096 bytes; the whole string at most 31 characters) prints that process's
-memory instead of a dump, which can then be disassembled:
+`peek:PID:ADDR:LEN` (at most 4096 bytes; the whole string at most 31 characters) prints that process's mapped memory
+instead of a dump, so a function can be disassembled at the address it runs at:
 
 ```sh
 echo 'peek:142:0x10dbe4a00:0x300' > /sys/module/beringia_xnu/parameters/dump
@@ -166,25 +202,32 @@ objdump -D -b binary -m i386:x86-64 --adjust-vma=0x10dbe4a00 code.bin
 ## macOS's own logs
 
 macOS keeps its unified log (tracev3), launchd's log and its crash reports on the system image. After a run (the
-image is in use while XNU runs), copy them out as root:
+image is in use while XNU runs), copy them out as root (`experiment.sh` does this itself):
 
 ```sh
 sudo env BERINGIA_UNIFIEDLOG=/path/to/unifiedlog_iterator BERINGIA_APFS_KO=/path/to/linux-apfs-rw/apfs.ko \
-  tools/debug/harvest.sh            # into the newest run directory's macos-logs/
+  tools/debug/harvest.sh            # the newest run's disk (its meta.txt) into its macos-logs/
 ```
 
 It mounts the image read-only with linux-apfs-rw inside a private mount namespace (a mount in the shared namespace
 also appears in WSL's own service namespaces, where it outlives `umount` and keeps the loop device and the module
 busy). With `BERINGIA_UNIFIEDLOG` pointing at Mandiant's `unifiedlog_iterator` (macos-UnifiedLogs, Apache-2.0; build
-it yourself) it also writes `unifiedlog.jsonl`, one JSON object per log entry with `process`, `pid`, `subsystem`,
-`message` and `boot_uuid`; filter by the newest `boot_uuid`, every boot of the image is in there.
+it yourself) it also writes `unifiedlog.jsonl.gz`, one JSON object per log entry with `process`, `pid`, `subsystem`,
+`message` and `boot_uuid` (decoded on a Linux scratch directory, which is much faster than on `/mnt/c`). A per-run
+copy of the golden image holds one boot; on an image booted again, filter by the newest `boot_uuid`, or empty the logs
+after harvesting with `--clear`.
+
+The run ends without a shutdown, and logd keeps its newest entries in memory, so the last minutes before `stop.sh`
+are often missing; `experiment.sh` waits `--settle` seconds (default 30) before stopping for that reason.
 
 ## The screen
 
 The loader gives XNU a boot framebuffer (`fb=WxH`, default 1280x800, XRGB8888) at the top of the low carve-out, outside
-XNU's RAM, and a device-tree node `/display` whose `reg` covers it. IONDRVSupport's `IONDRVFramebuffer` matches that
-node and drives the memory through `IOBootNDRV`, so WindowServer gets a display without a GPU driver. Linux reads the
-same memory through `/dev/beringia-fb` (root only; the geometry is in `/sys/class/misc/beringia-fb/geometry`):
+XNU's RAM, and a device-tree node `/display` whose `reg` covers it. `BeringiaFramebuffer`
+([../kexts/BeringiaFramebuffer](../kexts/BeringiaFramebuffer)) matches that node and describes one 60 Hz mode and an
+EDID, so CoreDisplay accepts it (IONDRVSupport's `IONDRVFramebuffer` matches the node too, but CoreDisplay keeps its
+display offline). Linux reads the same memory through `/dev/beringia-fb` (root only; the geometry is in
+`/sys/class/misc/beringia-fb/geometry`):
 
 ```sh
 sudo tools/debug/fbshot.py shot.png                   # one PNG

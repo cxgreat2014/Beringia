@@ -15,16 +15,21 @@ Chooser is idle in `-[NSApplication run]` (run `20261128-023734`). Its window do
 there is no input. How each blocker on the way was found and fixed:
 [research/m5-userspace-bringup.md, section 7](research/m5-userspace-bringup.md).
 
-- The legacy prelinked kernel links **48 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
-  (security, storage, APFS, AppleSMC, DSMOS, serial, HID, graphics, GPU wrangler, IOSurface, LiveFS) plus
-  `BeringiaDisk` and `BeringiaSMC`; the recipe is in [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
+- The legacy prelinked kernel links **49 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
+  (46: security, storage, APFS, AppleSMC, DSMOS, serial, HID, graphics, GPU wrangler, IOSurface, LiveFS) plus
+  `BeringiaDisk`, `BeringiaSMC` and `BeringiaFramebuffer`; the recipe is in
+  [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
 - The display is the loader's boot framebuffer (`fb=WxH`, default 1280x800), driven through the device-tree node
   `/display` by `BeringiaFramebuffer` (one fully described 60 Hz mode, an EDID; it opens itself at boot so the display
   is attached before WindowServer looks). CoreDisplay now accepts the mode (`Mode has dimensions 1280x800`, run
   `20261128-035849`) and WindowServer orders Language Chooser's window front, **but only the cursor reaches the
-  screen**: WindowServer cannot register `com.apple.CARenderServer`, the display ID stays 0, and an `Installer
-  Progress` app runs as well. No GPU, no Metal device. Without BeringiaFramebuffer, IONDRVSupport's
-  `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps that display offline.
+  screen**. Run `20261128-042946` narrowed it: `Installer Progress` releases its shield window 20 s into the boot;
+  SkyLight starts its `Software compositor`; and while WindowServer builds the CoreDisplay framebuffer, IOPresentment
+  reports `Error: Unable to acquire map`, followed by a CoreDisplay error breadcrumb from
+  `CoreDisplay::Framebuffer::Framebuffer`. WindowServer also cannot register `com.apple.CARenderServer` (`Operation
+  already in progress`: the job's plist already owns that name), and the display ID stays 0. No GPU, no Metal device.
+  Without BeringiaFramebuffer, IONDRVSupport's `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps
+  that display offline.
 - The image had lost **23 427 hard-linked file names** in extraction (powerd's launchd plist among them, so powerd
   never ran); `tools/disk/mtree.py` restored them from the OTA's mtree. bluetoothd is disabled in the image for now:
   with no Bluetooth controller it never answers, and its clients (Language Chooser) waited forever.
@@ -107,7 +112,7 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 |---|---|
 | Userland | The full system's launchd and ~200 processes run, WindowServer and Language Chooser among them. No interactive shell, no input, no login yet. bluetoothd is disabled in the image (no controller). |
 | System image | One APFS volume (role 0), not the System/Data/Preboot/VM container macOS expects; hand-built, not reproducible from this repository yet; no `SF_RESTRICTED` flags (hence `CSR_ALLOW_UNRESTRICTED_FS`). DroidVM found single-volume and union layouts a source of daemon crash loops and moved to a real multi-volume container. |
-| kexts | A legacy prelinked kernel (48 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only, with the DSMOS key the user supplies (`BERINGIA_OSK_FILE`). |
+| kexts | A legacy prelinked kernel (49 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only, with the DSMOS key the user supplies (`BERINGIA_OSK_FILE`). |
 | trust caches | `trust_cache_init` succeeds with the img4 interface; no full-system static trust cache is supplied by the loader yet. Patch 0029 remains as the no-image4 fallback. |
 | kalloc_type | Degraded to size-based data zones (upstream LLVM has no `__builtin_xnu_type_summary`). Kext views use the external fallback in the static format; no hang has been observed. |
 | Block I/O | BeringiaDisk mounts APFS read-write. It reports a volatile write cache and a flush is an `fsync` of the image on the host; force-unit-access writes are not honoured individually. The read-only fallback is not validated. |
@@ -115,7 +120,7 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 | NMI / #MC | **Not forwarded yet**: in the foreign world they enter XNU's own handlers. |
 | NVRAM | IODTNVRAM is a stub; IONVRAM is announced as ready. NVRAM writes from ramrod report unsupported function. |
 | SMP | One hosted CPU. The pending word is atomic on both sides already. The block host call reads its request once, and the thread dump refuses to run with more than one CPU (its walk takes no lock). |
-| Display / input | A boot framebuffer (loader `fb=`), `IONDRVFramebuffer`, screenshots through `/dev/beringia-fb`; no GPU, no Metal, a single fixed mode. No input device yet. XNU runs under Linux's PAT, so its WT mappings (PA1) are write-combining and its WC mappings (PA6), the framebuffer's, are UC- (hosted patch 0025 leaves the host PAT alone): correct, but drawing is slower than on real hardware. |
+| Display / input | A boot framebuffer (loader `fb=`), `BeringiaFramebuffer` (formerly `IONDRVFramebuffer`), screenshots through `/dev/beringia-fb`; no GPU, no Metal, a single fixed mode. No input device yet. XNU runs under Linux's PAT, so its WT mappings (PA1) are write-combining and its WC mappings (PA6), the framebuffer's, are UC- (hosted patch 0025 leaves the host PAT alone): correct, but drawing is slower than on real hardware. |
 | Linux latency | While XNU runs with interrupts off, that Linux CPU takes no interrupts. Measure before SMP. |
 
 ## Next steps, in order
