@@ -36,8 +36,18 @@ never receives pixels. `BeringiaPCI.cpp` therefore publishes a virtual `IOPCIDev
 space synthesized by `configRead*`, properties published in `start`) under the node, and starts a second
 `BeringiaFramebuffer` under it whose VRAM comes from `PE_Video`.
 
-It is not on by default (`beringia_pci=1` in `BERINGIA_BOOT_ARGS` enables it). The first two runs showed what is still
-missing: `IOPCIDevice::attach()` faults without an `IOPCIBridge` provider, and with `IOService::attach()` instead,
-`AppleGPUWrangler` faults at `+0x8c1` reading `+0x78` of the device — the bridge pointer it expects an `IOPCIDevice` to
-have. The next step is a minimal `IOPCIBridge` that vends the device (its `configRead*` answer from the same table), so
-the device is an ordinary Apple `IOPCIDevice` with a real bridge.
+It is not on by default (`beringia_pci=1` in `BERINGIA_BOOT_ARGS` enables it), because IOPCIFamily's own
+`IOPCIConfigurator` manages every published `IOPCIDevice` and expects one that a real host bridge created. The runs so
+far, each an experiment that is now understood:
+
+| Run | Result |
+|---|---|
+| `20261128-062114` | `IOPCIDevice::attach()` faults without an `IOPCIBridge` provider |
+| `20261128-062407` | with `IOService::attach()`, `AppleGPUWrangler` faults reading the device's bridge pointer |
+| `20261128-064951` | a `BeringiaPCIBridge` (`IOPCIBridge`, ten overrides) fixes that, but 106b:eeee matches AppleParavirtGPU, whose `getResources()` faults on a device without real BARs |
+| `20261128-065233` | with 106b:0be1 (unmatched), `IOPCIDevice::getResources()` still faults at `+0x556` (bridge's `reserved` at `+0x170` is NULL), called from the configurator path |
+
+The device's config space and properties are correct (`config eeee106b class 03000000`, 4-byte OSData properties). What
+is missing is what a host bridge sets up before a device is published — the resource/BAR state `getResources()` walks.
+The next step is a decision between an ACPI host bridge the loader describes (so Apple's own `AppleACPIPCI` enumerates
+the device and owns that state) and a further look at what the configurator needs from a synthetic one.
