@@ -20,6 +20,8 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/pci/IOPCIDevice.h>
+#include "BeringiaPCI.h"
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
@@ -64,6 +66,10 @@ class BeringiaFramebuffer : public IOFramebuffer
 	IOTimerEventSource *fConnectTimer;
 	thread_call_t fOpenCall;
 	bool fStopping;
+	bool fHosted;              /* this instance is the PCI-hosted framebuffer, not the device-tree node */
+	BeringiaPCIDevice *fPCI;   /* the virtual PCI device it sits on */
+
+	bool startHosted(IOService *deviceNode);
 
 	UInt64 pixelClock(void) const
 	{
@@ -197,23 +203,73 @@ BeringiaFramebuffer::buildEDID(void)
 	e[127] = (UInt8)(0x100 - sum);
 }
 
+/*
+ * The instance that matches the device tree node does not drive the display itself: it creates the virtual PCI device
+ * under the node and a framebuffer under that, because GPUWrangler lists a GPU only with an IOPCIDevice ancestor (see
+ * BeringiaPCI.h). The instance under the PCI device (fHosted) does the work.
+ */
+bool
+BeringiaFramebuffer::startHosted(IOService *node)
+{
+	BeringiaFramebuffer *fb;
+	bool ok;
+
+	/* The virtual PCI device is an experiment until it carries a real IOPCIBridge (GPUWrangler reads the bridge at
+	 * its +0x78, run 20261128-062407): boot with beringia_pci=1 to try it; by default the driver stays on the node. */
+	uint32_t pci = 0;
+	if (!PE_parse_boot_argn("beringia_pci", &pci, sizeof(pci)) || !pci) {
+		return false;
+	}
+	fPCI = new BeringiaPCIDevice;
+	if (!fPCI || !fPCI->init(NULL)) {
+		IOLog("BeringiaFramebuffer: no virtual PCI device\n");
+		return false;
+	}
+	/* IOService::attach, not IOPCIDevice::attach: that one expects the provider to be an IOPCIBridge and faults on
+	 * a platform node (run 20261128-062114) */
+	if (!fPCI->IOService::attach(node)) {
+		IOLog("BeringiaFramebuffer: could not attach the PCI device to %s\n", node->getName());
+		return false;
+	}
+	if (!fPCI->start(node)) {
+		IOLog("BeringiaFramebuffer: the PCI device did not start\n");
+		return false;
+	}
+	fPCI->registerService();
+	fb = new BeringiaFramebuffer;
+	if (!fb || !fb->init(NULL)) {
+		return false;
+	}
+	fb->fHosted = true;
+	if (!fb->attach(fPCI) || !fb->start(fPCI)) {
+		IOLog("BeringiaFramebuffer: the PCI-hosted framebuffer did not start\n");
+		fb->release();
+		return false;
+	}
+	fb->registerService();
+	ok = true;
+	IOLog("BeringiaFramebuffer: hosted under virtual PCI %04x:%04x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE);
+	return ok;
+}
+
 bool
 BeringiaFramebuffer::start(IOService *provider)
 {
 	PE_Video video;
 	IODeviceMemory *mem;
 
+	if (!fHosted && OSDynamicCast(IOPCIDevice, provider) == NULL) {
+		/* matched the device tree node: with beringia_pci=1, build the PCI device and the framebuffer under it and
+		 * publish neither here; otherwise this instance is the framebuffer itself */
+		if (startHosted(provider)) {
+			return false;
+		}
+	}
 	bzero(&video, sizeof(video));
 	if (!getPlatform() || getPlatform()->getConsoleInfo(&video) != kIOReturnSuccess || !video.v_baseAddr ||
 	    video.v_depth != 32 || !video.v_width || !video.v_height || video.v_rowBytes < video.v_width * 4) {
 		IOLog("BeringiaFramebuffer: no 32 bpp boot framebuffer (base %#lx depth %lu)\n",
 		    (unsigned long)video.v_baseAddr, (unsigned long)video.v_depth);
-		return false;
-	}
-	mem = provider->getDeviceMemoryWithIndex(0);
-	if (!mem || video.v_baseAddr < mem->getPhysicalAddress() ||
-	    video.v_baseAddr + (UInt64)video.v_rowBytes * video.v_height > mem->getPhysicalAddress() + mem->getLength()) {
-		IOLog("BeringiaFramebuffer: the boot framebuffer is not inside the provider's memory\n");
 		return false;
 	}
 	fWidth = (UInt32)video.v_width;
@@ -224,8 +280,24 @@ BeringiaFramebuffer::start(IOService *provider)
 	while ((UInt64)fVBlank * 1000000ULL < 460ULL * (fHeight + fVBlank) * kRefreshHz) {
 		fVBlank++;
 	}
-	fVRAM = IODeviceMemory::withSubRange(mem, video.v_baseAddr - mem->getPhysicalAddress(),
-	    (IOByteCount)fStride * fHeight);
+	/* provider memory: the device-tree node describes the region the loader reserved; a virtual PCI device has no
+	 * bars, and the loader's PE_Video already names the same memory */
+	mem = provider->getDeviceMemoryWithIndex(0);
+	if (mem) {
+		if (video.v_baseAddr < mem->getPhysicalAddress() ||
+		    video.v_baseAddr + (UInt64)video.v_rowBytes * video.v_height >
+		    mem->getPhysicalAddress() + mem->getLength()) {
+			IOLog("BeringiaFramebuffer: the boot framebuffer is not inside the provider's memory\n");
+			return false;
+		}
+		fVRAM = IODeviceMemory::withSubRange(mem, video.v_baseAddr - mem->getPhysicalAddress(),
+		    (IOByteCount)fStride * fHeight);
+	} else if (fHosted) {
+		fVRAM = IODeviceMemory::withRange(video.v_baseAddr, (IOByteCount)fStride * fHeight);
+	} else {
+		IOLog("BeringiaFramebuffer: the provider has no memory for the boot framebuffer\n");
+		return false;
+	}
 	if (!fVRAM) {
 		return false;
 	}

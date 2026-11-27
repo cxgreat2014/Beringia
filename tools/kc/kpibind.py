@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Bind a kext's imports the way Apple's kext linker does: through the dependencies its Info.plist declares.
 
-  tools/kc/kpibind.py [--strict] KEXT INFO_PLIST EXTENSIONS OUT
+  tools/kc/kpibind.py [--strict] [--allow REGEX] KEXT INFO_PLIST EXTENSIONS OUT
 
 KEXT is a thin x86_64 kext executable, EXTENSIONS the KDK's /System/Library/Extensions (it holds the dependencies,
 and the KPI symbol sets in System.kext/PlugIns).
@@ -16,13 +16,16 @@ not). OpenCorePkg's linker looks a name up in the kernel before the KPIs and wou
 function. This tool renames every aliased import to its target first; the linker then finds the right function.
 
 It also reports imports that no declared dependency exports (Apple's linker would refuse them; OpenCorePkg would
-silently bind them to any kernel symbol of that name). --strict makes that an error.
+silently bind them to any kernel symbol of that name). --strict makes that an error, except for names matching an
+--allow REGEX (repeatable): IOPCIDevice's _RESERVEDIOPCIDevice vtable slots are exported by the kernel's IOPCIFamily
+but not by the KDK kext's export list, and a subclass references them.
 
 The kext's code signature is dropped (the string table grows into its place; prelinked kexts are not verified
 against it, and linking invalidates it anyway).
 """
 import os
 import plistlib
+import re
 import struct
 import sys
 
@@ -80,9 +83,16 @@ def drop_code_signature(buf):
 def main():
     args = sys.argv[1:]
     strict = '--strict' in args
+    allows = []
+    while '--allow' in args:
+        i = args.index('--allow')
+        if i + 1 >= len(args):
+            die('--allow needs a regular expression')
+        allows.append(re.compile(args[i + 1]))
+        del args[i:i + 2]
     args = [a for a in args if a != '--strict']
     if len(args) != 4:
-        die('usage: kpibind.py [--strict] KEXT INFO_PLIST EXTENSIONS OUT')
+        die('usage: kpibind.py [--strict] [--allow REGEX] KEXT INFO_PLIST EXTENSIONS OUT')
     kext_path, info_path, extensions, out_path = args
     data, _ = thin_x86_64(open(kext_path, 'rb').read(), kext_path)
     info = plistlib.load(open(info_path, 'rb'))
@@ -144,6 +154,8 @@ def main():
         print(f'kpibind: {ident}: dependency {dep} is not in {extensions}')
     for name in unresolved:
         print(f'kpibind: {ident}: {name} is not exported by its dependencies')
+    allowed = [n for n in unresolved if any(a.search(n) for a in allows)]
+    unresolved = [n for n in unresolved if n not in allowed]
     if strict and (unresolved or missing):
         sys.exit(1)
 

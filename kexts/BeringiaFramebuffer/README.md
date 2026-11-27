@@ -27,3 +27,17 @@ kexts/BeringiaFramebuffer/build.sh      # $BERINGIA_BUILD/kexts/BeringiaFramebuf
 
 Like the other Beringia kexts it defines a `kmod_info` (`KMOD_EXPLICIT_DECL`): OpenCore's kext linker (`tools/kc`)
 refuses a kext without one (`InternalPrelinkKext` returns `EFI_UNSUPPORTED`, reported as `FAIL ... (8000000000000002)`).
+
+## The virtual PCI device (experiment: `beringia_pci=1`)
+
+GPUWrangler lists a display GPU only with an `IOPCIDevice` ancestor, and IOPresentment's device map needs a PCI
+display-class device: a bare `IOFramebuffer` on the device-tree node is a "no GPU" (`(NG) ... pci 0 ... accel 0`) and
+never receives pixels. `BeringiaPCI.cpp` therefore publishes a virtual `IOPCIDevice` (106b:eeee, class 0x030000, config
+space synthesized by `configRead*`, properties published in `start`) under the node, and starts a second
+`BeringiaFramebuffer` under it whose VRAM comes from `PE_Video`.
+
+It is not on by default (`beringia_pci=1` in `BERINGIA_BOOT_ARGS` enables it). The first two runs showed what is still
+missing: `IOPCIDevice::attach()` faults without an `IOPCIBridge` provider, and with `IOService::attach()` instead,
+`AppleGPUWrangler` faults at `+0x8c1` reading `+0x78` of the device — the bridge pointer it expects an `IOPCIDevice` to
+have. The next step is a minimal `IOPCIBridge` that vends the device (its `configRead*` answer from the same table), so
+the device is an ordinary Apple `IOPCIDevice` with a real bridge.
