@@ -29,6 +29,7 @@ struct ldr {
 	u64 sym_vstart, sym_stack, sym_hook, sym_shared;     /* slid virtual addresses */
 	struct beringia_shared *shared; /* host address of XNU's beringia_shared */
 	unsigned int ncpus;
+	int halted;                     /* XNU ended the run itself (BERINGIA_CALL_HALT): every host call aborts */
 };
 
 extern struct ldr ldr;

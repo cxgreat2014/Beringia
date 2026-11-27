@@ -162,6 +162,8 @@ long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 	static unsigned long hc_count;
 
 	hc_count++;
+	if (READ_ONCE(ldr.halted))
+		return BH_ABORT;        /* the run ended: unwind every CPU that still calls in */
 	if (hc_count <= 40)
 		bh_logf("xnu: hc %lu nr=%#lx", hc_count, nr);
 	switch (nr) {
@@ -174,7 +176,8 @@ long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 			console_line(a1, a2, "XNU PANIC on cpu ");
 		return BH_ABORT;
 	case BERINGIA_CALL_HALT:
-		bh_logf("xnu: halt (%lu)", a1);
+		WRITE_ONCE(ldr.halted, 1);
+		bh_logf("xnu: halt (%lu): the run ended itself", a1);
 		return BH_ABORT;
 	case BERINGIA_CALL_MARK:
 		bh_logf("xnu: mark %lu %#lx", a1, a2);

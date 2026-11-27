@@ -56,6 +56,8 @@ enum beringia_call {
 #define BERINGIA_PENDING_IPI    (1u << 1)   /* another XNU CPU signalled this one */
 #define BERINGIA_PENDING_STOP   (1u << 2)   /* the host is ending the run */
 #define BERINGIA_PENDING_DUMP   (1u << 3)   /* bring-up: print every thread's state and backtrace */
+#define BERINGIA_PENDING_ESTOP  (1u << 4)   /* the host is ending the run and it did not end in time */
+
 
 struct beringia_cpu_shared {
 	volatile unsigned int pending;      /* BERINGIA_PENDING_* */

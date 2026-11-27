@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Sat, 28 Nov 2026 04:51:56 +0800
+Subject: [PATCH] hosted: an orderly shutdown from the host
+
+Until now a run ended by the host aborting every host call, so logd's buffer
+was lost with the VM and the APFS image was left as it stood. The host can now
+ask for a shutdown, and the kernel path is the one a power key takes:
+
+- BERINGIA_PENDING_STOP: interrupt() hands it to a thread call, which sends
+  SIGTERM to launchd with psignal (kill(2) may not signal init). launchd's
+  handler shuts the system down: logd flushes, the disks are unmounted, and
+  launchd calls reboot(2), which reaches halt_all_cpus.
+- BERINGIA_PENDING_ESTOP: the host's escalation; the same thread call runs
+  reboot_kernel(RB_HALT) instead, the BSD shutdown without launchd. It also
+  covers a STOP that arrives before launchd has its handler (initproc NULL).
+- halt_all_cpus no longer reports a panic: it calls BERINGIA_CALL_HALT, which
+  marks the run halted in the loader, and the CPUs unwind.
+
+The bits are cleared in interrupt()'s fetch-and like the others (otherwise
+idle would keep finding them set), and idle wakes for them.
+---
+ EXTERNAL_HEADERS/beringia/abi.h    |  2 +
+ EXTERNAL_HEADERS/beringia_hosted.h |  6 +++
+ bsd/kern/bsd_init.c                |  7 ++++
+ osfmk/i386/AT386/model_dep.c       |  2 +-
+ osfmk/i386/pmCPU.c                 |  3 +-
+ osfmk/i386/trap.c                  |  6 ++-
+ osfmk/x86_64/beringia.c            | 60 ++++++++++++++++++++++++++++++
+ 7 files changed, 83 insertions(+), 3 deletions(-)
+
+diff --git a/EXTERNAL_HEADERS/beringia/abi.h b/EXTERNAL_HEADERS/beringia/abi.h
+index 47e604e..2f2da88 100644
+--- a/EXTERNAL_HEADERS/beringia/abi.h
++++ b/EXTERNAL_HEADERS/beringia/abi.h
+@@ -56,6 +56,8 @@ enum beringia_call {
+ #define BERINGIA_PENDING_IPI    (1u << 1)   /* another XNU CPU signalled this one */
+ #define BERINGIA_PENDING_STOP   (1u << 2)   /* the host is ending the run */
+ #define BERINGIA_PENDING_DUMP   (1u << 3)   /* bring-up: print every thread's state and backtrace */
++#define BERINGIA_PENDING_ESTOP  (1u << 4)   /* the host is ending the run and it did not end in time */
++
+ 
+ struct beringia_cpu_shared {
+ 	volatile unsigned int pending;      /* BERINGIA_PENDING_* */
+diff --git a/EXTERNAL_HEADERS/beringia_hosted.h b/EXTERNAL_HEADERS/beringia_hosted.h
+index cd6f7ce..1483202 100644
+--- a/EXTERNAL_HEADERS/beringia_hosted.h
++++ b/EXTERNAL_HEADERS/beringia_hosted.h
+@@ -68,5 +68,11 @@ void beringia_wallclock(uint64_t *sec, uint64_t *nsec);
+ void beringia_panic(const char *msg) __attribute__((noreturn));
+ /* Bring-up: every thread's state, wait event and kernel backtrace on the host console (interrupt context). */
+ void beringia_dump_threads(void);
++/* The host asked for an orderly end of the run (BERINGIA_PENDING_STOP / _ESTOP): set up once from bsd_init, take
++ * the request in interrupt context, act on it from a thread call. */
++void beringia_shutdown_init(void);
++void beringia_shutdown_signal(unsigned int pending);
++/* End the run from halt_all_cpus: reason 0 halt, 1 reboot. */
++void beringia_halt(unsigned int reason) __attribute__((noreturn));
+ 
+ #endif /* _BERINGIA_HOSTED_H_ */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index c23e7fd..a84476c 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -102,6 +102,7 @@
+ 
+ #include <kern/startup.h>
+ #include <kern/thread.h>
++#include <beringia_hosted.h>
+ #include <kern/task.h>
+ #include <kern/ast.h>
+ #include <kern/zalloc.h>
+@@ -508,6 +509,12 @@ bsd_init(void)
+ 
+ 	throttle_init();
+ 
++	/* BERINGIA: the host can ask for an orderly shutdown from here on (the thread call was available since
++	 * thread_call_initialize, which runs before bsd_init). */
++	if (beringia_hosted()) {
++		beringia_shutdown_init();
++	}
++
+ 	printf(copyright);
+ 
+ #if CONFIG_DEV_KMEM
+diff --git a/osfmk/i386/AT386/model_dep.c b/osfmk/i386/AT386/model_dep.c
+index 1ded7fc..903e934 100644
+--- a/osfmk/i386/AT386/model_dep.c
++++ b/osfmk/i386/AT386/model_dep.c
+@@ -649,7 +649,7 @@ halt_all_cpus(boolean_t reboot)
+ {
+ 	if (beringia_hosted()) {
+ 		/* BERINGIA: do not reset the host VM; end the hosted run and return to Linux. */
+-		beringia_panic(reboot ? "MACH Reboot" : "CPU halted");
++		beringia_halt(reboot ? 1 : 0);
+ 	}
+ 	if (reboot) {
+ 		printf("MACH Reboot\n");
+diff --git a/osfmk/i386/pmCPU.c b/osfmk/i386/pmCPU.c
+index 3a985a8..702e45e 100644
+--- a/osfmk/i386/pmCPU.c
++++ b/osfmk/i386/pmCPU.c
+@@ -187,7 +187,8 @@ machine_idle(void)
+ 
+ 			beringia_call(BERINGIA_CALL_IDLE, deadline, (unsigned long)&beringia_shared.cpu[cpu].pending);
+ 			if (beringia_shared.cpu[cpu].pending &
+-			    (BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI | BERINGIA_PENDING_DUMP)) {
++			    (BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI | BERINGIA_PENDING_DUMP |
++			    BERINGIA_PENDING_STOP | BERINGIA_PENDING_ESTOP)) {
+ 				lapic_timer_swi();       /* interrupt() takes every pending bit */
+ 			}
+ 		} else {
+diff --git a/osfmk/i386/trap.c b/osfmk/i386/trap.c
+index a8852d8..6050a21 100644
+--- a/osfmk/i386/trap.c
++++ b/osfmk/i386/trap.c
+@@ -395,7 +395,8 @@ interrupt(x86_saved_state_t *state)
+ 		 * PENDING_TIMER. Atomically, because other CPUs set PENDING_IPI concurrently.
+ 		 */
+ 		pending = __atomic_fetch_and(&beringia_shared.cpu[beringia_cpu()].pending,
+-		    ~(BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI | BERINGIA_PENDING_DUMP), __ATOMIC_SEQ_CST);
++		    ~(BERINGIA_PENDING_TIMER | BERINGIA_PENDING_IPI | BERINGIA_PENDING_DUMP |
++		    BERINGIA_PENDING_STOP | BERINGIA_PENDING_ESTOP), __ATOMIC_SEQ_CST);
+ 		if (xnu_timer) {
+ 			pending |= BERINGIA_PENDING_TIMER;
+ 		}
+@@ -411,6 +412,9 @@ interrupt(x86_saved_state_t *state)
+ 		if (pending & BERINGIA_PENDING_DUMP) {
+ 			beringia_dump_threads();
+ 		}
++		if (pending & (BERINGIA_PENDING_STOP | BERINGIA_PENDING_ESTOP)) {
++			beringia_shutdown_signal(pending);
++		}
+ 		return;
+ 	}
+ 
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+index 4f4084a..cd359e3 100644
+--- a/osfmk/x86_64/beringia.c
++++ b/osfmk/x86_64/beringia.c
+@@ -39,6 +39,13 @@
+ #include <i386/pmap.h>
+ #include <i386/pmap_internal.h>
+ #include <i386/machine_routines.h>
++#include <kern/thread_call.h>
++#include <sys/reboot.h>
++/* BSD-private, declared here as osfmk/kern/task.c and bsd_kern.c do: bsd/sys/proc_internal.h cannot be included
++ * from osfmk, its sys/types.h conflicts with the kernel's. */
++extern void *XNU_PTRAUTH_SIGNED_PTR("initproc") initproc;
++extern void psignal(void *p, int sig);
++#define BERINGIA_SIGTERM        15      /* bsd/sys/signal.h's SIGTERM (that header cannot be included from osfmk) */
+ 
+ /* Set by the loader before vstart runs; 0 means not hosted. */
+ uint64_t beringia_hook = 0;
+@@ -121,6 +128,59 @@ beringia_panic(const char *msg)
+ 	}
+ }
+ 
++/* The run ended well (the BSD shutdown path reached halt_all_cpus): tell the host and wait for it to unload. */
++void
++beringia_halt(unsigned int reason)
++{
++	beringia_console_flush(beringia_cpu() % BERINGIA_MAX_CPUS);
++	beringia_call(BERINGIA_CALL_HALT, reason, 0);
++	for (;;) {
++		__asm__ volatile ("cli; hlt");
++	}
++}
++
++/*
++ * An orderly shutdown, requested by the host (beringia_xnu.ko shutdown=1, then shutdown=escalate if it takes too
++ * long). STOP reaches launchd as SIGTERM, which shuts the system down the way a power key does: logd flushes, the
++ * disks are unmounted, and launchd calls reboot(2), which brings the kernel to halt_all_cpus. psignal is the kernel's
++ * own path: kill(2) may not signal init. ESTOP runs the same BSD shutdown in the kernel (reboot_kernel), without
++ * launchd, for when it does not answer: it signals every process (logd flushes), syncs and unmounts on its own.
++ */
++static thread_call_t beringia_shutdown_call;
++static unsigned int beringia_shutdown_wanted;   /* 1: STOP, 2: ESTOP */
++
++static void
++beringia_shutdown_request(thread_call_param_t param0, thread_call_param_t param1)
++{
++	unsigned int how = (unsigned int)(uintptr_t)param1;
++
++	(void)param0;
++	if (how < 2 && initproc) {
++		psignal(initproc, BERINGIA_SIGTERM);    /* launchd shuts the system down, as for a power key */
++		return;
++	}
++	reboot_kernel(RB_HALT, NULL);
++}
++
++void
++beringia_shutdown_init(void)
++{
++	beringia_shutdown_call = thread_call_allocate(&beringia_shutdown_request, NULL);
++}
++
++/* Interrupt context (interrupts off): defer to a thread call, which may signal and sleep. */
++void
++beringia_shutdown_signal(unsigned int pending)
++{
++	unsigned int how = (pending & BERINGIA_PENDING_ESTOP) ? 2 : 1;
++
++	if (!beringia_shutdown_call || how <= beringia_shutdown_wanted) {
++		return;
++	}
++	beringia_shutdown_wanted = how;
++	thread_call_enter1(beringia_shutdown_call, (thread_call_param_t)(uintptr_t)how);
++}
++
+ /*
+  * Random bytes from the host CSPRNG, for the hosted build before the corecrypto kext registers (g_crypto_funcs is
+  * NULL then). The host call reads a physical address, so bounce through a buffer in the kernel image, whose physical

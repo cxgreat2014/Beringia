@@ -74,6 +74,42 @@ static const struct kernel_param_ops dump_ops = { .set = dump_set };
 module_param_cb(dump, &dump_ops, NULL, 0200);
 MODULE_PARM_DESC(dump, "process-name substring, \"*\", or peek:PID:ADDR:LEN: the hosted XNU prints threads and user stacks");
 
+/*
+ * An orderly end of the run: `echo 1` asks XNU to shut down (launchd gets SIGTERM and shuts the system down the way a
+ * power key does, logd flushes and the disks are unmounted); `echo escalate` runs the BSD shutdown in the kernel
+ * instead, for when launchd does not answer. Either way XNU reaches halt_all_cpus, which ends the hosted run.
+ */
+static int shutdown_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int bit;
+	int i;
+
+	if (!ldr.shared)
+		return -ENODEV;
+	if (ldr.shared->kernel_abi != BERINGIA_ABI_VERSION)
+		return -EINVAL;
+	bit = (!strncmp(val, "esc", 3) || val[0] == '2') ? BERINGIA_PENDING_ESTOP : BERINGIA_PENDING_STOP;
+	bh_logf("xnu: shutdown requested (%s)", bit == BERINGIA_PENDING_ESTOP ? "escalate" : "stop");
+	for (i = 0; i < ldr.ncpus; i++) {
+		__atomic_fetch_or(&ldr.shared->cpu[i].pending, bit, __ATOMIC_SEQ_CST);
+		bh_kick(i);
+	}
+	return 0;
+}
+
+static const struct kernel_param_ops shutdown_ops = { .set = shutdown_set };
+module_param_cb(shutdown, &shutdown_ops, NULL, 0200);
+MODULE_PARM_DESC(shutdown, "1: orderly shutdown; escalate: the kernel's own shutdown path");
+
+static int state_get(char *buf, const struct kernel_param *kp)
+{
+	return scnprintf(buf, PAGE_SIZE, "%s\n", READ_ONCE(ldr.halted) ? "halted" : "running");
+}
+
+static const struct kernel_param_ops state_ops = { .get = state_get };
+module_param_cb(state, &state_ops, NULL, 0444);
+MODULE_PARM_DESC(state, "running, or halted once XNU ended the run itself");
+
 static int find_low_range(void)
 {
 	int i;

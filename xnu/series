@@ -49,3 +49,4 @@ hosted/0044-name-registry-entries-that-have-no-property-tabl.patch
 hosted/0045-no-platform-nub-for-the-nvram-service.patch
 hosted/0046-report-what-keeps-the-iokit-registry-busy-bring-.patch
 hosted/0047-user-space-backtraces-and-memory-peeks-in-the-th.patch
+hosted/0048-an-orderly-shutdown-from-the-host.patch
