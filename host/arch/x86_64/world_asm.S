@@ -84,6 +84,15 @@ SYM_CODE_START_LOCAL(to_linux)
 	popq	%r14				/* return address: the stack is about to change */
 	movq	BHW_TSTACK_TOP(%r15), %rsp
 	lidt	bh_tidt_foreign_desc(%rip)
+	/*
+	 * Linux's CR4 first, unconditionally: to_foreign cleared UMIP in it, and nothing in Linux may run without it.
+	 * Still on the foreign CR3, whose PCID field is 0 (XNU runs without PCIDs), so this write is valid even if the
+	 * foreign kernel had cleared CR4.PCIDE. The foreign value is kept for the safety net (hw_check).
+	 */
+	movq	%cr4, %rax
+	movq	%rax, BHW_X_CR4(%r15)
+	movq	BHW_L_CR4(%r15), %rax
+	movq	%rax, %cr4
 	movq	BHW_L_CR3(%r15), %rax
 	movq	%rax, %cr3
 	/* GDT and TR: through Linux's writable GDT alias (the loaded one is a read-only fixmap) */
@@ -148,10 +157,11 @@ SYM_CODE_START_LOCAL(to_foreign)
 	lidt	bh_tidt_linux_desc(%rip)
 	/*
 	 * CR4.UMIP must be clear in the foreign world on every entry: macOS reads the IDT in user mode
-	 * (libsystem's __os_cpu_number, via sidt/sgdt), which #GPs when Linux left UMIP set. On exit to
-	 * Linux the state safety net puts Linux's CR4 (with UMIP set) back.
+	 * (libsystem's __os_cpu_number, via sidt/sgdt), which #GPs when Linux left UMIP set. Linux's CR4 is
+	 * saved here and to_linux puts it back on every exit, independent of the state safety net.
 	 */
 	movq	%cr4, %rax
+	movq	%rax, BHW_L_CR4(%r15)
 	andq	$~0x800, %rax
 	movq	%rax, %cr4
 	movq	BHW_X_CR3(%r15), %rax

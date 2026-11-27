@@ -334,7 +334,11 @@ int main(int argc, char **argv)
 	printf("memcheck: %" PRIu64 " GiB, %" PRIu64 " rounds, %" PRIu64
 	       " corrupted 64-bit locations\n", size_gib, rounds, checker.bad);
 	if (checker.selftest) {
-		if (checker.selftest_detected) {
+		if (checker.selftest_detected && checker.bad > 1) {
+			/* the intentional write was found, but so were other changes */
+			printf("MEMCHECK SELFTEST: FAIL (%" PRIu64 " unexpected corrupted locations besides the intentional write)\n",
+			       checker.bad - 1);
+		} else if (checker.selftest_detected) {
 			printf("MEMCHECK SELFTEST: PASS (intentional write detected)\n");
 		} else {
 			printf("MEMCHECK SELFTEST: FAIL (intentional write missed)\n");
@@ -347,7 +351,7 @@ int main(int argc, char **argv)
 	if (checker.pagemap_fd >= 0)
 		close(checker.pagemap_fd);
 	munmap(checker.words, (size_t)size_bytes);
-	return checker.selftest ? !checker.selftest_detected : checker.bad != 0;
+	return checker.selftest ? (!checker.selftest_detected || checker.bad > 1) : checker.bad != 0;
 
 bad_arguments:
 	usage(argv[0]);

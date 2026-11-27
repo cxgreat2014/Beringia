@@ -24,6 +24,16 @@ SYM_CODE_START(bh_st_main)
 	ANNOTATE_NOENDBR
 	movq	%rdi, %rbx			/* spin count between host calls */
 	movq	%rsi, %r12			/* flags: bit 0 = tamper with IA32_PAT (the host must notice and restore it) */
+	/*
+	 * The tampered value is fixed (Linux's PAT with bit 0 of PA6 flipped: UC- <-> WB, WC <-> UC, always a valid
+	 * type). Flipping it on every loop instead would put the original value back every other time and let a broken
+	 * restore pass the end-of-run check by luck.
+	 */
+	movl	$0x277, %ecx
+	rdmsr
+	xorl	$0x10000, %edx
+	movl	%eax, %r13d
+	movl	%edx, %r14d
 1:	sti
 	movq	%rbx, %rcx
 2:	pause
@@ -33,9 +43,9 @@ SYM_CODE_START(bh_st_main)
 	lock incq bh_st_loops(%rip)
 	testq	$1, %r12
 	jz	3f
-	movl	$0x277, %ecx			/* IA32_PAT: flip bit 0 of PA6 (UC- <-> WB, WC <-> UC; always a valid type) */
-	rdmsr
-	xorl	$0x10000, %edx
+	movl	$0x277, %ecx			/* IA32_PAT := the tampered value */
+	movl	%r13d, %eax
+	movl	%r14d, %edx
 	wrmsr
 3:
 	movl	$HC_YIELD, %edi

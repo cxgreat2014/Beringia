@@ -28,9 +28,14 @@ struct bh_world bh_worlds[BH_MAX_CPUS];
  * into the foreign world and compared right after every return, so a difference is the foreign kernel's doing. It is
  * reported once per register and CPU and restored, except IA32_APIC_BASE: a local APIC that was disabled or switched
  * out of x2APIC mode has lost its configuration, the CPU no longer receives interrupts, and the run has to end.
+ *
+ * CR4 is special: the switch itself clears UMIP for the foreign world, so to_linux restores Linux's CR4 on every exit
+ * whether or not the safety net is on, and the net compares the foreign world's CR4 with what it was entered with.
+ *
+ * Load-time only: turning it on in the middle of a run would compare against snapshots that were never taken.
  */
 static unsigned int statecheck = 1;
-module_param(statecheck, uint, 0644);
+module_param(statecheck, uint, 0444);
 MODULE_PARM_DESC(statecheck, "compare (and restore) Linux's unswitched CPU state after every foreign-world exit");
 
 enum {
@@ -86,21 +91,21 @@ static void hw_read(u64 *v)
 			rdmsrq(hw_regs[i].msr, v[i]);
 }
 
-static void hw_write(int i, u64 v)
+/* Returns 0, or the wrmsr fault if an MSR could not be put back. */
+static int hw_write(int i, u64 v)
 {
 	switch (i) {
 	case HW_CR4:
 		asm volatile("mov %0, %%cr4" : : "r"(v) : "memory");
-		break;
+		return 0;
 	case HW_CR8:
 		asm volatile("mov %0, %%cr8" : : "r"(v) : "memory");
-		break;
+		return 0;
 	case HW_DR7:
 		native_set_debugreg(7, v);
-		break;
+		return 0;
 	default:
-		wrmsrq_safe(hw_regs[i].msr, v);
-		break;
+		return wrmsrq_safe(hw_regs[i].msr, v);
 	}
 }
 
@@ -111,20 +116,32 @@ static bool hw_check(struct bh_world *w)
 	bool ok = true;
 	int i;
 
+	/* CR4: to_linux has already put Linux's value back; check what the foreign kernel did to its own copy */
+	if (w->x_cr4 != (was[HW_CR4] & ~X86_CR4_UMIP)) {
+		atomic_long_inc(&hw_diffs);
+		if (!(hw_snap[w->index].reported & BIT(HW_N))) {
+			hw_snap[w->index].reported |= BIT(HW_N);
+			bh_logf("cpu %llu: the foreign kernel changed CR4 in its world: %#llx -> %#llx (Linux's restored)",
+				w->index, was[HW_CR4] & ~X86_CR4_UMIP, w->x_cr4);
+		}
+	}
 	hw_read(now);
 	for (i = 0; i < HW_N; i++) {
+		int err = 0;
+
 		if (!(hw_present & BIT(i)) || now[i] == was[i])
 			continue;
 		atomic_long_inc(&hw_diffs);
+		if (!hw_regs[i].fatal)
+			err = hw_write(i, was[i]);
 		if (!(hw_snap[w->index].reported & BIT(i))) {
 			hw_snap[w->index].reported |= BIT(i);
 			bh_logf("cpu %llu: the foreign kernel changed %s: %#llx -> %#llx (%s)", w->index, hw_regs[i].name,
-				was[i], now[i], hw_regs[i].fatal ? "cannot be repaired, ending the run" : "restored");
+				was[i], now[i], hw_regs[i].fatal ? "cannot be repaired, ending the run" :
+				err ? "restore FAILED, ending the run" : "restored");
 		}
-		if (hw_regs[i].fatal)
+		if (hw_regs[i].fatal || err)
 			ok = false;
-		else
-			hw_write(i, was[i]);
 	}
 	return ok;
 }

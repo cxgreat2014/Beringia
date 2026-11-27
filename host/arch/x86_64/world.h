@@ -66,6 +66,8 @@
 #define BHW_START_RSP       456
 #define BHW_START_RDI       464
 #define BHW_START_RSI       472
+#define BHW_L_CR4           480     /* Linux's CR4 at the last entry; to_linux puts it back unconditionally */
+#define BHW_X_CR4           488     /* the foreign world's CR4 at the last exit (for the safety net) */
 #define BHW_BOOT_GDT        512     /* 16 descriptors: the initial foreign GDT (XNU layout) */
 #define BHW_BOOT_TSS        640     /* 128 bytes: its TSS */
 #define BHW_XSAVE           4096    /* 8 KiB, 64-byte aligned: the foreign FPU/XSAVE state */
@@ -99,7 +101,8 @@ struct bh_world {
 	u64 x_lstar, x_star, x_cstar, x_sfmask, x_tsc_aux, x_se_cs, x_se_esp, x_se_eip, x_xcr0, x_cr0, x_sel, x_ss, x_cs;
 	u64 fn, abort_rsp, tstack_top, result, in_foreign, nr, a1, a2;
 	u64 start_rip, start_rsp, start_rdi, start_rsi;
-	u64 pad1[4];
+	u64 l_cr4, x_cr4;
+	u64 pad1[2];
 	u64 boot_gdt[16];
 	u8 boot_tss[128];
 	u8 pad0[BHW_XSAVE - 768];
@@ -114,6 +117,8 @@ static_assert(offsetof(struct bh_world, x_cs) == BHW_X_CS);
 static_assert(offsetof(struct bh_world, fn) == BHW_FN);
 static_assert(offsetof(struct bh_world, a2) == BHW_A2);
 static_assert(offsetof(struct bh_world, start_rsi) == BHW_START_RSI);
+static_assert(offsetof(struct bh_world, l_cr4) == BHW_L_CR4);
+static_assert(offsetof(struct bh_world, x_cr4) == BHW_X_CR4);
 static_assert(offsetof(struct bh_world, boot_gdt) == BHW_BOOT_GDT);
 static_assert(offsetof(struct bh_world, boot_tss) == BHW_BOOT_TSS);
 static_assert(offsetof(struct bh_world, xsave) == BHW_XSAVE);

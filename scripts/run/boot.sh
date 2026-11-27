@@ -22,8 +22,11 @@ set -euo pipefail
 secs=${1:-10}
 
 if [ "${BERINGIA_NO_BUILD:-0}" != 1 ]; then
-	make -s -C "$BERINGIA_ROOT/host" KDIR="$LINUX_KDIR"
-	make -s -C "$BERINGIA_ROOT/loader" KDIR="$LINUX_KDIR"
+	# Build as the owner of the tree, never as root: root-owned objects break the next build as the normal user.
+	owner=$(stat -c %U "$BERINGIA_ROOT")
+	as_owner() { if [ "$owner" != root ]; then runuser -u "$owner" -- "$@"; else "$@"; fi; }
+	as_owner make -s -C "$BERINGIA_ROOT/host" KDIR="$LINUX_KDIR"
+	as_owner make -s -C "$BERINGIA_ROOT/loader" KDIR="$LINUX_KDIR"
 fi
 img=${BERINGIA_KERNEL:-$BERINGIA_BUILD/xnu/obj/DEVELOPMENT_X86_64/kernel.development.unstripped}
 [ -f "$img" ] || die "no $img (scripts/xnu/build.sh)"
@@ -68,6 +71,19 @@ else
 	echo "warning: BERINGIA_WIN_DIR is not set: no run directory, and the watchdog is not armed" >&2
 fi
 
+# The host settings changed below are saved once (not again by a second boot without stop.sh) and put back by stop.sh.
+state=/run/beringia
+mkdir -p "$state"
+if [ ! -f "$state/host-settings" ]; then
+	{
+		for k in kernel.panic_on_oops kernel.softlockup_panic kernel.softlockup_all_cpu_backtrace kernel.panic_on_rcu_stall; do
+			echo "sysctl $k $(sysctl -n "$k")"
+		done
+		echo "rcu_cpu_stall_timeout $(cat /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout)"
+		echo "console_loglevel $(cut -f1 /proc/sys/kernel/printk)"
+	} > "$state/host-settings.tmp"
+	mv -f "$state/host-settings.tmp" "$state/host-settings"
+fi
 sysctl -qw kernel.panic_on_oops=0
 if [ "${BERINGIA_FAILFAST:-1}" = 1 ]; then
 	sysctl -qw kernel.softlockup_panic=1 kernel.softlockup_all_cpu_backtrace=1 kernel.panic_on_rcu_stall=1
@@ -82,7 +98,10 @@ rmmod beringia_host 2>/dev/null || true
 dmesg -C
 [ -z "${BERINGIA_TRACE:-}" ] || : > "$BERINGIA_TRACE"
 
-# Arm the watchdog just before the risky part (scripts/run/wsl-watchdog.ps1 reads this; stop.sh removes it).
+# Arm the watchdog just before the risky part (scripts/run/wsl-watchdog.ps1 reads this; stop.sh removes it). At the
+# end of the armed period the watchdog runs stop_script itself: once it stops probing, WSL idles the VM out and would
+# kill a still-running XNU (with its disk image mounted read-write) instead of stopping it.
+arm=
 if [ -n "$run_dir" ]; then
 	arm=$BERINGIA_WIN_DIR/run/armed
 	{
@@ -91,14 +110,25 @@ if [ -n "$run_dir" ]; then
 		echo "run_dir_wsl=$run_dir"
 		echo "distro=${WSL_DISTRO_NAME:-}"
 		echo "expires=$(( $(date +%s) + ${BERINGIA_WATCH_MINUTES:-60} * 60 ))"
+		echo "stop_script=$BERINGIA_ROOT/scripts/run/stop.sh"
 	} > "$arm.tmp"
 	mv -f "$arm.tmp" "$arm"
+	echo "$run_dir" > "$BERINGIA_WIN_DIR/run/last"
 fi
+# If loading fails, do not leave a dead run armed for the watchdog to act on later.
+load_failed() {
+	rmmod beringia_xnu 2>/dev/null || true
+	rmmod beringia_host 2>/dev/null || true
+	[ -z "$arm" ] || [ ! -f "$arm" ] || mv -f "$arm" "$run_dir/armed.load-failed"
+	echo "error: loading the modules failed; watchdog disarmed" >&2
+}
+trap load_failed EXIT
 
 insmod "$BERINGIA_ROOT/host/beringia_host.ko" carve="$BERINGIA_CARVE" ${BERINGIA_TRACE:+trace="$BERINGIA_TRACE"}
 # Module parameters are split at spaces unless the value is in double quotes, which must reach the kernel literally.
 insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" ${ramdisk_param:+"$ramdisk_param"} ${disk_param:+"$disk_param"} \
 	${BERINGIA_BOOT_ARGS:+"boot_args=\"$BERINGIA_BOOT_ARGS\""}
+trap - EXIT
 sleep "$secs"
 dmesg | grep -E "beringia|BUG:|Oops:|RIP:|WARNING:|rcu:|watchdog:" | tail -200
 [ -z "$run_dir" ] || { dmesg > "$run_dir/dmesg.txt"; echo "run $run_id: $run_dir (watchdog armed; scripts/run/stop.sh to end)"; }

@@ -7,8 +7,10 @@
 #
 # How:
 #   * It does NOTHING unless a run is armed. scripts/run/boot.sh writes <StateDir>\run\armed (key=value lines: run_id,
-#     run_dir, distro, expires = unix seconds) right before it loads the modules; scripts/run/stop.sh removes it; an
-#     armed run also expires on its own (BERINGIA_WATCH_MINUTES). While nothing is armed the watchdog never runs
+#     run_dir, distro, expires = unix seconds, stop_script) right before it loads the modules; scripts/run/stop.sh
+#     removes it; an armed run also expires on its own (BERINGIA_WATCH_MINUTES), and then the watchdog runs its
+#     stop_script (an orderly unload) before disarming, because once the probes stop WSL idles the VM out and would
+#     kill a still-running XNU. While nothing is armed the watchdog never runs
 #     wsl.exe, so it neither keeps the VM alive nor starts it again after a crash (which would overwrite the console
 #     log of the crash).
 #   * While a run is armed, every PollSeconds it
@@ -117,9 +119,20 @@ function Get-RunDir($arm) {
 }
 
 function Disarm($arm, [string]$reason) {
+    # Only this run's marker: boot.sh may have armed a new run in the meantime.
+    $now = Read-Arm
+    if (-not $now -or $now['run_id'] -ne $arm['run_id']) { return }
     $dest = Join-Path (Get-RunDir $arm) ('armed.' + $reason)
     try { Move-Item -LiteralPath $ArmFile -Destination $dest -Force -ErrorAction Stop }
     catch { Remove-Item -LiteralPath $ArmFile -Force -ErrorAction SilentlyContinue }
+}
+
+# The WSL VM's memory process. vmmemWSL on current WSL; plain vmmem (also used by other Hyper-V VMs such as Windows
+# Sandbox or Docker) only on old builds that have no vmmemWSL.
+function Get-VmIds {
+    $vm = @(Get-Process -Name 'vmmemWSL' -ErrorAction SilentlyContinue)
+    if (-not $vm) { $vm = @(Get-Process -Name 'vmmem' -ErrorAction SilentlyContinue) }
+    return ($vm | ForEach-Object { $_.Id } | Sort-Object) -join ','
 }
 
 function Save-Incident($arm, [string]$reason, [string]$detail) {
@@ -181,16 +194,27 @@ while ($true) {
             $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
             if ($arm['expires'] -and [int64]$arm['expires'] -lt $now) {
                 Update-Mirror $arm
+                # Stop the run instead of just walking away: without the probes WSL idles the VM out within a
+                # minute or so, which would kill a still-running XNU with its disk image mounted read-write.
+                if ($arm['stop_script'] -and (Get-VmIds)) {
+                    if ($DryRun) {
+                        Log "run ${current}: armed period expired; DRY RUN, not running $($arm['stop_script'])"
+                    } else {
+                        $st = Invoke-Wsl ('-d ' + $arm['distro'] + ' -u root -e ' + $arm['stop_script']) 180
+                        $res = if ($st.TimedOut) { 'timed out' } else { "exit $($st.ExitCode)" }
+                        Log "run ${current}: armed period expired; ran $($arm['stop_script']) ($res)"
+                    }
+                }
+                Update-Mirror $arm
                 Disarm $arm 'expired'
-                Log "run ${current}: armed period expired; disarmed"
+                Log "run ${current}: disarmed (expired)"
                 $current = $null
             } else {
                 Update-Mirror $arm
                 $fail = $null
                 # The VM, not the distro: WSL stops an idle distro after a few seconds while the VM (and the hosted
                 # XNU in its kernel) keeps running. vmmemWSL is the VM's memory process; a new id means a new VM.
-                $vm = @(Get-Process -Name 'vmmemWSL', 'vmmem' -ErrorAction SilentlyContinue)
-                $vmNow = ($vm | ForEach-Object { $_.Id }) -join ','
+                $vmNow = Get-VmIds
                 if (-not $vmId) { $vmId = $vmNow }
                 if (-not $vmNow -or $vmNow -ne $vmId) {
                     $why = 'WSL VM process gone (guest panic/reset, or shut down by hand)'

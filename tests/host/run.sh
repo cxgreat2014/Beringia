@@ -7,16 +7,17 @@ SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 BUILD_DIR=${BUILD_DIR:-"$HOME/beringia-work/build/host-tests"}
 DURATION=${1:-${DURATION:-60}}
 MEMCHECK_GIB=${MEMCHECK_GIB:-2}
-FPCHECK_CPU=${FPCHECK_CPU:-0}
+# CPU 1 by default: the world switch runs hosted CPUs on Linux CPUs 1..n (linux_cpu=1), never on CPU 0
+FPCHECK_CPU=${FPCHECK_CPU:-1}
 RESULT_FILE=${RESULT_FILE:-"$BUILD_DIR/results.log"}
 
 if [[ $# -gt 1 || ! $DURATION =~ ^[1-9][0-9]*$ ]]; then
     printf 'Usage: %s [SECONDS]\n' "$0" >&2
-    printf 'Environment: MEMCHECK_GIB=2 FPCHECK_CPU=0 BUILD_DIR=... RESULT_FILE=...\n' >&2
+    printf 'Environment: MEMCHECK_GIB=2 FPCHECK_CPU=1 BUILD_DIR=... RESULT_FILE=...\n' >&2
     exit 2
 fi
 
-"$SOURCE_DIR/build.sh"
+"$SOURCE_DIR/build.sh" || { printf 'build failed; not running stale binaries\n' >&2; exit 1; }
 mkdir -p "$(dirname -- "$RESULT_FILE")"
 
 (
