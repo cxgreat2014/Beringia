@@ -39,6 +39,15 @@ public:
 	virtual IOPCIAddressSpace getBridgeSpace(void) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn setLinkSpeed(tIOPCILinkSpeed linkSpeed, bool retrain) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn getLinkSpeed(tIOPCILinkSpeed *linkSpeed) APPLE_KEXT_OVERRIDE;
+	/* The base class matches and probes through host-bridge state this device does not have: it walks config space
+	 * of a real bus (matchKeys, getNubResources) and scans buses (probeBus, configure). Nothing here enumerates or
+	 * matches drivers; the one device is created and published by BeringiaFramebuffer. */
+	virtual bool matchNubWithPropertyTable(IOService *nub, OSDictionary *propertyTable, SInt32 *score) APPLE_KEXT_OVERRIDE;
+	virtual bool pciMatchNub(IOPCIDevice *nub, OSDictionary *table, SInt32 *score) APPLE_KEXT_OVERRIDE;
+	virtual bool matchKeys(IOPCIDevice *nub, const char *keys, UInt32 defaultMask, UInt8 regNum) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn getNubResources(IOService *nub) APPLE_KEXT_OVERRIDE;
+	virtual void probeBus(IOService *provider, UInt8 busNum) APPLE_KEXT_OVERRIDE;
+	virtual bool configure(IOService *provider) APPLE_KEXT_OVERRIDE;
 };
 
 class BeringiaPCIDevice : public IOPCIDevice
@@ -50,6 +59,8 @@ public:
 	void setPCIBridge(IOPCIBridge *bridge);
 
 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+	/* no BARs to assign; IOPCIDevice::getResources() walks resource state only a real host bridge sets up */
+	virtual IOReturn getResources(void) APPLE_KEXT_OVERRIDE;
 	virtual UInt32 configRead32(IOPCIAddressSpace space, UInt8 offset) APPLE_KEXT_OVERRIDE;
 	virtual UInt16 configRead16(IOPCIAddressSpace space, UInt8 offset) APPLE_KEXT_OVERRIDE;
 	virtual UInt8 configRead8(IOPCIAddressSpace space, UInt8 offset) APPLE_KEXT_OVERRIDE;

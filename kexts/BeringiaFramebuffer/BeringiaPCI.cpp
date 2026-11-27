@@ -67,6 +67,12 @@ BeringiaPCIDevice::start(IOService *provider)
 	return true;
 }
 
+IOReturn
+BeringiaPCIDevice::getResources(void)
+{
+	return kIOReturnSuccess;
+}
+
 void
 BeringiaPCIDevice::setPCIBridge(IOPCIBridge *bridge)
 {
@@ -186,4 +192,39 @@ BeringiaPCIBridge::getLinkSpeed(tIOPCILinkSpeed *linkSpeed)
 		*linkSpeed = kIOPCILinkSpeed_2_5_GTs;   /* there is no lower value, and no link at all */
 	}
 	return kIOReturnUnsupported;
+}
+
+bool
+BeringiaPCIBridge::matchNubWithPropertyTable(IOService *nub, OSDictionary *propertyTable, SInt32 *score)
+{
+	return false;
+}
+
+bool
+BeringiaPCIBridge::pciMatchNub(IOPCIDevice *nub, OSDictionary *table, SInt32 *score)
+{
+	return false;
+}
+
+bool
+BeringiaPCIBridge::matchKeys(IOPCIDevice *nub, const char *keys, UInt32 defaultMask, UInt8 regNum)
+{
+	return false;
+}
+
+IOReturn
+BeringiaPCIBridge::getNubResources(IOService *nub)
+{
+	return kIOReturnSuccess;
+}
+
+void
+BeringiaPCIBridge::probeBus(IOService *provider, UInt8 busNum)
+{
+}
+
+bool
+BeringiaPCIBridge::configure(IOService *provider)
+{
+	return true;
 }

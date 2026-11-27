@@ -30,8 +30,12 @@ there is no input. How each blocker on the way was found and fixed:
   still scans out through the CoreDisplay DisplayPipe, whose presentation needs an
   AppleGPUWrangler GPU with an `IOAccelerator` under an `IOPCIDevice`; a bare IOFramebuffer has no such identity
   (GPUWrangler: `(NG) ... pci 0 ... accel 0`), and its VRAM is never mapped by WindowServer. Apple's own software
-  path, `AppleParavirtGPU`, is a fake PCI GPU. So the next step is a virtual `IOPCIDevice` with a minimal
-  `IOAccelerator` (BeringiaPCI). WindowServer also cannot register `com.apple.CARenderServer` (`Operation already in
+  path, `AppleParavirtGPU`, is a fake PCI GPU. A virtual `IOPCIDevice` (BeringiaPCI) now gets that far: with
+  `beringia_pci=1`, GPUWrangler lists it as `gpu 0xf9ce flags 0x10 (IG) vid.did=106b.0be1 ... fb0:-1 ...
+  /BeringiaFramebuffer` (run `20261128-065909`, kernel clean) — a PCI GPU with the framebuffer under it, not the
+  0x8000 no-PCI fallback. Its record still shows `agdc 0` and `accel 0`, so IOPresentment still says `Unable to
+  acquire map`; the next step is the AppleGraphicsDeviceControl capability array and an IOAccelerator with a
+  display pipe (analysis/w2-gpu checklist steps 7-13). WindowServer also cannot register `com.apple.CARenderServer` (`Operation already in
   progress`: the job's plist already owns that name), and the display ID stays 0. Without BeringiaFramebuffer,
   IONDRVSupport's `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps that display offline.
 - The image had lost **23 427 hard-linked file names** in extraction (powerd's launchd plist among them, so powerd

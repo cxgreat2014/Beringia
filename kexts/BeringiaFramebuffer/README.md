@@ -36,18 +36,23 @@ never receives pixels. `BeringiaPCI.cpp` therefore publishes a virtual `IOPCIDev
 space synthesized by `configRead*`, properties published in `start`) under the node, and starts a second
 `BeringiaFramebuffer` under it whose VRAM comes from `PE_Video`.
 
-It is not on by default (`beringia_pci=1` in `BERINGIA_BOOT_ARGS` enables it), because IOPCIFamily's own
-`IOPCIConfigurator` manages every published `IOPCIDevice` and expects one that a real host bridge created. The runs so
-far, each an experiment that is now understood:
+It is not on by default (`beringia_pci=1` in `BERINGIA_BOOT_ARGS` enables it). Getting a synthetic device through
+IOPCIFamily took four experiments, each one visible in the log:
 
 | Run | Result |
 |---|---|
 | `20261128-062114` | `IOPCIDevice::attach()` faults without an `IOPCIBridge` provider |
 | `20261128-062407` | with `IOService::attach()`, `AppleGPUWrangler` faults reading the device's bridge pointer |
-| `20261128-064951` | a `BeringiaPCIBridge` (`IOPCIBridge`, ten overrides) fixes that, but 106b:eeee matches AppleParavirtGPU, whose `getResources()` faults on a device without real BARs |
-| `20261128-065233` | with 106b:0be1 (unmatched), `IOPCIDevice::getResources()` still faults at `+0x556` (bridge's `reserved` at `+0x170` is NULL), called from the configurator path |
+| `20261128-064951` | a `BeringiaPCIBridge` (`IOPCIBridge`, ten overrides) fixes that; 106b:eeee was replaced by 106b:0be1 because AppleParavirtGPU matches the former and its `getResources()` faults |
+| `20261128-065558` | the configurator path then faults in `IOPCIBridge::matchKeys` |
+| `20261128-065909` | **gate passed**: with `getResources()` overridden and the bridge's matching/probing neutralized, GPUWrangler lists the GPU as PCI: `gpu 0xf9ce flags 0x10 (IG) vid.did=106b.0be1 ... pci 0x100000126 ... fb0:-1 0x100000127 /BeringiaFramebuffer` — a real GPU id, not the 0x8000 no-PCI fallback |
 
-The device's config space and properties are correct (`config eeee106b class 03000000`, 4-byte OSData properties). What
-is missing is what a host bridge sets up before a device is published — the resource/BAR state `getResources()` walks.
+What a synthetic device cannot do is let IOPCIFamily configure or match drivers through it (it walks resource state only
+a host bridge sets up), so `BeringiaPCIBridge` refuses to match or probe and `BeringiaPCIDevice::getResources()` is a
+no-op. Nothing needs that yet: the device is created directly, and drivers for it will be created the same way.
+
+Next (W2 checklist steps 7-13): the log shows `agdc 0` and `accel 0`, and IOPresentment still says `Unable to acquire
+map`. The GPU record needs an AppleGraphicsDeviceControl (with the capability array naming our framebuffer) and an
+IOAccelerator with a display pipe; then CoreDisplay builds a real (non-virtual) display and SkyLight scans out.
 The next step is a decision between an ACPI host bridge the loader describes (so Apple's own `AppleACPIPCI` enumerates
 the device and owns that state) and a further look at what the configurator needs from a synthetic one.
