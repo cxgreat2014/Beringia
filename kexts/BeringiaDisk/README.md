@@ -49,11 +49,16 @@ protects both areas. The host validates every range with `bh_phys` before a
 write, temporarily restores Linux interrupts/preemption around sleeping file
 I/O, and closes the file only after all hosted CPUs stop.
 
-**Durability limitation:** positional `kernel_read`/`kernel_write` calls are
-synchronous with respect to Linux and subsequent guest reads, but there is no
-`bh_file_sync` helper yet. `BERINGIA_BLOCK_FLUSH` orders requests; it is not an
-`fsync` promise to stable host storage. The kext consequently reports no write
-cache. Add an fsync host helper before relying on crash durability.
+**Durability:** positional `kernel_read`/`kernel_write` calls are synchronous
+with respect to Linux and subsequent guest reads, but a completed write is only
+in the host's page cache. The kext therefore reports a (volatile) write cache,
+and `BERINGIA_BLOCK_FLUSH` (from `doSynchronize`) is an `fsync` of the image file
+on the host (`bh_file_sync`), ordered after every write that completed before
+it. APFS issues those flushes for its checkpoints. A WSL VM crash can still lose
+writes that were not yet flushed, exactly like a power loss on a real disk with
+a write cache. Force-unit-access attributes on individual writes are not
+honoured yet. (Before 2026-11-27 the flush was not an fsync and the kext
+reported no write cache, which told APFS its writes were already durable.)
 
 ## Loading at boot
 

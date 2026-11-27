@@ -50,68 +50,75 @@ static long ldr_block_info(unsigned long a1)
 	return 0;
 }
 
+/* The request's result word, the only field the host writes back into XNU's copy. */
+static long ldr_block_result(struct beringia_block_req *shared, long long result)
+{
+	WRITE_ONCE(shared->result, result);
+	return 0;
+}
+
 static long ldr_block_rw(unsigned long a1)
 {
-	struct beringia_block_req *req = bh_phys(a1, sizeof(*req));
+	struct beringia_block_req *shared = bh_phys(a1, sizeof(*shared));
+	struct beringia_block_req req;
 	void *segment[BERINGIA_BLOCK_MAX_SEGS];
 	u64 total = 0, done = 0;
 	unsigned int i;
 	long error = 0;
 
-	if (!req)
+	if (!shared)
 		return -EFAULT;
-	req->result = -EINVAL;
-	if (req->unit != 0 || !ldr.disk_file) {
-		req->result = -ENODEV;
-		return 0;
-	}
-	if (req->write == BERINGIA_BLOCK_FLUSH) {
-		if (req->nseg != 0)
-			return 0;
-		/* All file writes are synchronous and this lock orders the flush after any concurrent write. There is no
-		 * bh_file_sync helper yet, so this is not an fsync of the host's stable storage. */
+	/*
+	 * One copy, then only the copy: the request lives in XNU's memory, and with more than one hosted CPU another one
+	 * could change it between the checks below and the I/O (a larger nseg or len, a NULL segment made non-empty).
+	 */
+	memcpy(&req, shared, sizeof(req));
+	barrier();
+	if (req.unit != 0 || !ldr.disk_file)
+		return ldr_block_result(shared, -ENODEV);
+	if (req.write == BERINGIA_BLOCK_FLUSH) {
+		if (req.nseg != 0)
+			return ldr_block_result(shared, -EINVAL);
+		/* After every write that completed before it (the lock orders it after a concurrent one), to stable
+		 * storage: the disk reports a write cache, so APFS relies on this for its checkpoints. */
 		block_io_enter();
+		error = bh_file_sync(ldr.disk_file);
 		block_io_leave();
-		req->result = 0;
-		return 0;
+		return ldr_block_result(shared, error);
 	}
-	if (req->write != BERINGIA_BLOCK_READ && req->write != BERINGIA_BLOCK_WRITE)
-		return 0;
-	if (req->nseg > BERINGIA_BLOCK_MAX_SEGS)
-		return 0;
-	if (req->write == BERINGIA_BLOCK_WRITE && ldr.disk_read_only) {
-		req->result = -EROFS;
-		return 0;
-	}
-	if (req->offset > ldr.disk_size)
-		return 0;
+	if (req.write != BERINGIA_BLOCK_READ && req.write != BERINGIA_BLOCK_WRITE)
+		return ldr_block_result(shared, -EINVAL);
+	if (req.nseg > BERINGIA_BLOCK_MAX_SEGS)
+		return ldr_block_result(shared, -EINVAL);
+	if (req.write == BERINGIA_BLOCK_WRITE && ldr.disk_read_only)
+		return ldr_block_result(shared, -EROFS);
+	if (req.offset > ldr.disk_size)
+		return ldr_block_result(shared, -EINVAL);
 
 	/* Validate the entire request before a write can have a partial side effect. */
-	for (i = 0; i < req->nseg; i++) {
-		u64 len = req->seg[i].len;
+	for (i = 0; i < req.nseg; i++) {
+		u64 len = req.seg[i].len;
 
 		segment[i] = NULL;
 		if (!len)
 			continue;
-		if (total > ldr.disk_size - req->offset ||
-		    len > ldr.disk_size - req->offset - total ||
-		    req->seg[i].pa + len < req->seg[i].pa)
-			return 0;
-		segment[i] = bh_phys(req->seg[i].pa, len);
-		if (!segment[i]) {
-			req->result = -EFAULT;
-			return 0;
-		}
+		if (total > ldr.disk_size - req.offset ||
+		    len > ldr.disk_size - req.offset - total ||
+		    req.seg[i].pa + len < req.seg[i].pa)
+			return ldr_block_result(shared, -EINVAL);
+		segment[i] = bh_phys(req.seg[i].pa, len);
+		if (!segment[i])
+			return ldr_block_result(shared, -EFAULT);
 		total += len;
 	}
 
 	block_io_enter();
-	for (i = 0; i < req->nseg && !error; i++) {
-		u64 len = req->seg[i].len, at = 0;
+	for (i = 0; i < req.nseg && !error; i++) {
+		u64 len = req.seg[i].len, at = 0;
 
 		while (at < len) {
-			long n = bh_file_rw(ldr.disk_file, req->write,
-			    (u8 *)segment[i] + at, len - at, req->offset + done);
+			long n = bh_file_rw(ldr.disk_file, req.write,
+			    (u8 *)segment[i] + at, len - at, req.offset + done);
 
 			if (n <= 0 || (u64)n > len - at) {
 				error = n < 0 ? n : -EIO;
@@ -122,8 +129,7 @@ static long ldr_block_rw(unsigned long a1)
 		}
 	}
 	block_io_leave();
-	req->result = error ? error : (long long)done;
-	return 0;
+	return ldr_block_result(shared, error ? error : (long long)done);
 }
 
 static void ldr_timer_fire(int cpu)

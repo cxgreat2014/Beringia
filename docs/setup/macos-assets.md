@@ -20,3 +20,25 @@ Extract the archive on a POSIX file system (ext4 in WSL): Windows file systems l
 
 Note: the Intel "update" payload is a delta subset (no `launchd`, no `dyld`). The complete system comes from the
 full OTA.
+
+## The DSMOS key (`BERINGIA_OSK_FILE`)
+
+Apple's `Dont Steal Mac OS X.kext` (DSMOS) decrypts protected system binaries with a key it reads from the SMC: the
+64-character text that the SMC of every Intel Mac returns for the keys `OSK0` (first 32 characters) and `OSK1` (last
+32). Beringia has no SMC; `kexts/BeringiaSMC` answers DSMOS instead, **with a key you supply**. The key is Apple's,
+so it is not in this repository, in any build output, or in any log: read it from your own Mac's SMC (any SMC key
+reader that can read `OSK0` and `OSK1`; QEMU's `applesmc` device asks for the same value).
+
+Put the 64 characters, OSK0 then OSK1, in a file outside the repository and name it in `local.env`:
+
+```sh
+install -d -m 700 ~/beringia-work/secrets
+printf '%s' '<OSK0><OSK1>' > ~/beringia-work/secrets/dsmos-osk.txt    # the 64 characters, nothing else
+chmod 600 ~/beringia-work/secrets/dsmos-osk.txt
+echo "BERINGIA_OSK_FILE=$HOME/beringia-work/secrets/dsmos-osk.txt" >> local.env
+```
+
+`boot.sh` passes the file to the loader (`beringia_xnu.ko osk=`, not visible in sysfs), which checks that it holds
+64 printable characters and hands it to XNU as the device-tree property `/efi/platform/beringia-osk`; BeringiaSMC
+takes it and removes the property before user space starts. Without the file the boot goes on, BeringiaSMC logs
+`no DSMOS key supplied` and DSMOS keeps waiting, so the binaries it protects cannot run.

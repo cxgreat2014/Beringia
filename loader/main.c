@@ -29,6 +29,10 @@ static char *boot_args = "-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cp
 module_param(boot_args, charp, 0444);
 static int linux_cpu = 1;
 module_param(linux_cpu, int, 0444);
+/* Not readable through sysfs: it names the user's own key file. */
+static char *osk = "";
+module_param(osk, charp, 0);
+MODULE_PARM_DESC(osk, "a file with the 64-character DSMOS key (OSK0 then OSK1) from your own Mac, for BeringiaSMC");
 
 struct ldr ldr;
 
@@ -130,6 +134,45 @@ static int open_disk(void)
 	return 0;
 }
 
+/*
+ * The DSMOS key (docs/setup/macos-assets.md): Apple's text, which every Intel Mac's SMC returns for the keys OSK0 and
+ * OSK1. It is not part of Beringia; the user supplies it from their own Mac, and BeringiaSMC answers DSMOS with it.
+ * It reaches XNU only as /efi/platform/beringia-osk, which BeringiaSMC takes and removes before user space runs.
+ */
+static int read_osk(void)
+{
+	u8 buf[80];
+	u64 size = 0;
+	long n;
+	void *f;
+	int i;
+
+	if (!osk[0])
+		return 0;
+	f = bh_file_open(osk, 0, &size);
+	if (!f) {
+		bh_logf("xnu: cannot open the DSMOS key file %s", osk);
+		return -ENOENT;
+	}
+	n = bh_file_rw(f, 0, buf, sizeof(buf), 0);
+	bh_file_close(f);
+	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+		n--;
+	for (i = 0; i < n && n == sizeof(ldr.osk); i++)
+		if (buf[i] < 0x20 || buf[i] > 0x7e)
+			n = -1;
+	if (n != sizeof(ldr.osk)) {
+		memzero_explicit(buf, sizeof(buf));
+		bh_logf("xnu: %s: the DSMOS key must be 64 printable characters (OSK0 followed by OSK1)", osk);
+		return -EINVAL;
+	}
+	memcpy(ldr.osk, buf, sizeof(ldr.osk));
+	memzero_explicit(buf, sizeof(buf));
+	ldr.have_osk = 1;
+	bh_log("xnu: DSMOS key supplied, for BeringiaSMC");
+	return 0;
+}
+
 static void close_disk(void)
 {
 	if (ldr.disk_file) {
@@ -158,7 +201,11 @@ static int __init ldr_init(void)
 	if (err)
 		return err;
 	ldr.ramdisk_path = ramdisk[0] ? ramdisk : NULL;
+	err = read_osk();
+	if (err)
+		return err;
 	err = ldr_boot_build(boot_args);
+	memzero_explicit(ldr.osk, sizeof(ldr.osk));	/* in XNU's device tree now; no copy stays in Linux */
 	if (err)
 		return err;
 	err = open_disk();

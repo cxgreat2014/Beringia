@@ -21,6 +21,8 @@ struct ldr {
 	void *disk_file;                /* disk=PATH, host block unit 0; held open until all hosted CPUs stop */
 	u64 disk_size;                  /* bytes, a nonzero multiple of BERINGIA_BLOCK_SIZE */
 	int disk_read_only;             /* disk= was opened read-only */
+	u8 osk[64];                     /* the DSMOS key the user supplied (osk=FILE), for BeringiaSMC; never built in */
+	int have_osk;
 	u64 sym_vstart, sym_stack, sym_hook, sym_shared;     /* slid virtual addresses */
 	struct beringia_shared *shared; /* host address of XNU's beringia_shared */
 	unsigned int ncpus;

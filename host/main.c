@@ -176,6 +176,12 @@ long bh_file_rw(void *f, int write, void *buf, unsigned long len, bh_u64 off)
 }
 EXPORT_SYMBOL(bh_file_rw);
 
+long bh_file_sync(void *f)
+{
+	return vfs_fsync(f, 0);
+}
+EXPORT_SYMBOL(bh_file_sync);
+
 void bh_file_close(void *f)
 {
 	if (f)

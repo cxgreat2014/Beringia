@@ -118,7 +118,9 @@ public:
 	}
 	IOReturn getWriteCacheState(bool *enabled) override
 	{
-		*enabled = false;
+		/* Completed writes are in the host's page cache, not necessarily on its disk: a volatile write cache, which
+		 * doSynchronize (an fsync on the host) empties. Reporting none would tell APFS its writes are already durable. */
+		*enabled = true;
 		return kIOReturnSuccess;
 	}
 	IOReturn setWriteCacheState(bool) override { return kIOReturnSuccess; }

@@ -90,6 +90,8 @@ void bh_console(const char *s);
 /* A host file for the foreign kernel's devices (disk images): open, size, positional read/write. */
 void *bh_file_open(const char *path, int writable, bh_u64 *size);
 long bh_file_rw(void *f, int write, void *buf, unsigned long len, bh_u64 off);
+/* Everything written so far on stable storage (fsync); 0 or a negative errno. May sleep. */
+long bh_file_sync(void *f);
 void bh_file_close(void *f);
 /* Random bytes from the host's CSPRNG; wall clock (UTC). */
 void bh_random(void *buf, unsigned long len);

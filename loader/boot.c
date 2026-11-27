@@ -16,6 +16,7 @@
 #define PTE_W   (1ULL << 1)
 #define PTE_PS  (1ULL << 7)
 #define GiB     (1ULL << 30)
+#define RAMDISK_HEADROOM (32U << 20)	/* left free after a RAM disk for XNU's early allocations (load_ramdisk) */
 
 /* ---- device tree ---- */
 
@@ -117,13 +118,28 @@ static u64 build_dt(u8 *base, u64 room)
 		}
 	}
 	{
+		/*
+		 * The machine identity, as the EFI booter supplies it: IOPlatformExpertDevice::generatePlatformUUID() derives
+		 * IOPlatformUUID (what gethostuuid() waits for) from /efi/platform/system-id on x86. The VMware-style
+		 * /options/platform-uuid fallback does not work here: IODTNVRAM takes over /options and hides its DT
+		 * properties. A fixed value for bring-up; it should become per installation.
+		 */
+		static const u8 system_id[16] = {
+			0xb5, 0xc4, 0x7f, 0x0e, 0x2d, 0x51, 0x4b, 0x5e,
+			0x9e, 0x7c, 0x5a, 0x7d, 0x3f, 0x90, 0xc8, 0x26,
+		};
+
 		dt_node(&b, 1, 1);
 		dt_str(&b, "name", "efi");
 		{
-			dt_node(&b, 3, 0);
+			dt_node(&b, ldr.have_osk ? 5 : 4, 0);
 			dt_str(&b, "name", "platform");
 			dt_u64(&b, "FSBFrequency", bh_tsc_hz());
 			dt_u64(&b, "ARTFrequency", 0);
+			dt_prop(&b, "system-id", system_id, sizeof(system_id));
+			/* the user's DSMOS key (loader main.c, read_osk); BeringiaSMC takes it and removes the property */
+			if (ldr.have_osk)
+				dt_prop(&b, "beringia-osk", ldr.osk, sizeof(ldr.osk));
 		}
 	}
 	{
@@ -231,7 +247,15 @@ static int load_ramdisk(void)
 		return -EINVAL;
 	}
 	pa = (ldr.physfree + (2ULL << 20) - 1) & ~((2ULL << 20) - 1);
-	if (pa + size > ldr.low.pa + ldr.low.size) {
+	/*
+	 * Room after it: XNU's early allocator (i386_init's ALLOCPAGES, the early page tables) takes pages from
+	 * kaddr + ksize, i.e. right after the RAM disk, without a bound check. Ending the RAM disk at the end of the
+	 * carve-out would let those writes run into host memory.
+	 */
+	if (size > ldr.low.pa + ldr.low.size || pa > ldr.low.pa + ldr.low.size - size ||
+	    ldr.low.pa + ldr.low.size - (pa + size) < RAMDISK_HEADROOM) {
+		bh_logf("xnu: ramdisk of %#llx bytes does not fit below %#llx with %u MiB to spare", size,
+			ldr.low.pa + ldr.low.size, RAMDISK_HEADROOM >> 20);
 		bh_file_close(f);
 		return -ENOSPC;
 	}
@@ -290,21 +314,29 @@ int ldr_boot_build(const char *cmdline)
 	ba->Revision = kBootArgsRevision1;
 	ba->Version = kBootArgsVersion2;
 	ba->efiMode = kBootArgsEfiMode64;
-	strscpy(ba->CommandLine, cmdline, sizeof(ba->CommandLine));
-	/* BeringiaDisk uses the exported PE_parse_boot_argn KPI instead of importing the kernel's non-KPI beringia_call.
-	 * This is exactly the entry address fill_shared writes to beringia_hook, in the host-module mapping shared with XNU. */
+	/*
+	 * The command line: [pmd0=RAMDISK ]user args beringia_hc=ENTRY[ rd=md0]. pmd0 goes first because XNU's memdev
+	 * scans only the first 256 bytes of it by hand; rd=md0 goes last so a root the user names wins. beringia_hc:
+	 * BeringiaDisk uses the exported PE_parse_boot_argn KPI instead of importing the kernel's non-KPI beringia_call;
+	 * it is exactly the entry address fill_shared writes to beringia_hook, in the host-module mapping shared with XNU.
+	 * Truncation is an error, never a silently shortened number.
+	 */
 	{
-		size_t used = strlen(ba->CommandLine);
-		int added = snprintf(ba->CommandLine + used, sizeof(ba->CommandLine) - used,
-		    " %s=%#llx", BERINGIA_HOSTCALL_BOOT_ARG, (unsigned long long)bh_hostcall_entry());
+		size_t room = sizeof(ba->CommandLine), used = 0;
+		int added = 0;
 
-		if (added < 0 || (size_t)added >= sizeof(ba->CommandLine) - used)
+		if (ldr.ramdisk_size)
+			added = snprintf(ba->CommandLine, room, "pmd0=%#llx.%#llx ", ldr.ramdisk_pa, ldr.ramdisk_size);
+		if (added < 0 || (size_t)added >= room)
 			return -E2BIG;
+		used = added;
+		added = snprintf(ba->CommandLine + used, room - used, "%s %s=%#llx%s", cmdline,
+		    BERINGIA_HOSTCALL_BOOT_ARG, (unsigned long long)bh_hostcall_entry(), ldr.ramdisk_size ? " rd=md0" : "");
+		if (added < 0 || (size_t)added >= room - used) {
+			bh_logf("xnu: boot-args too long (%zu bytes available)", room);
+			return -E2BIG;
+		}
 	}
-	if (ldr.ramdisk_size)
-		scnprintf(ba->CommandLine + strlen(ba->CommandLine),
-		    sizeof(ba->CommandLine) - strlen(ba->CommandLine),
-		    " pmd0=%#llx.%#llx rd=md0", ldr.ramdisk_pa, ldr.ramdisk_size);
 	ba->MemoryMap = ldr.memmap_pa;
 	ba->MemoryMapSize = n * sizeof(*mm);
 	ba->MemoryMapDescriptorSize = sizeof(*mm);
@@ -326,7 +358,15 @@ int ldr_boot_build(const char *cmdline)
 	ba->kslide = ldr.slide;
 	ba->PhysicalMemorySize = total;
 	ba->FSBFrequency = bh_tsc_hz();
-	ba->csrActiveConfig = 0x7f;	/* SIP off while bringing up (CSR_ALLOW_* bits) */
+	/*
+	 * SIP off while bringing up, and x86 XNU only honours csrActiveConfig with the flag set. 0x6f is every
+	 * CSR_ALLOW_* bit except CSR_ALLOW_APPLE_INTERNAL (0x10), which would make the system behave as an Apple-internal
+	 * build (MAC_MACH_UNEXPECTED becomes a panic, IONVRAM internal mode, ...). The one that is required today is
+	 * CSR_ALLOW_UNRESTRICTED_FS (0x2): without it the dyld shared cache, which lacks the SIP-protected flag on our
+	 * Linux-built volume, is refused by the shared region.
+	 */
+	ba->flags |= kBootArgsFlagCSRActiveConfig;
+	ba->csrActiveConfig = 0x6f;
 	ba->KC_hdrs_vaddr = 0;		/* a bare kernel, not a kernel collection */
 
 	err = build_page_tables(ldr.pml4_pa);
