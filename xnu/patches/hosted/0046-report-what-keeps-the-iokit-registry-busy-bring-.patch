@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Fri, 27 Nov 2026 15:50:39 +0800
+Subject: [PATCH] hosted: report what keeps the IOKit registry busy (bring-up)
+
+With beringia_busy_report=1, a kernel thread waits for the registry to go
+quiet in 60-second steps from a minute after the platform starts, so
+waitQuietWithOptions prints the busy leaves on every timeout. A user
+IOKitWaitQuiet() (WindowServer is blocked in one) waits forever without
+saying what for.
+---
+ iokit/Kernel/BeringiaPlatform.cpp | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/iokit/Kernel/BeringiaPlatform.cpp b/iokit/Kernel/BeringiaPlatform.cpp
+index c9841f9..455b5f6 100644
+--- a/iokit/Kernel/BeringiaPlatform.cpp
++++ b/iokit/Kernel/BeringiaPlatform.cpp
+@@ -44,6 +44,23 @@ extern "C" {
+ #include <beringia_hosted.h>
+ }
+ 
++/*
++ * Bring-up (boot argument beringia_busy_report=1): name what keeps the IOKit registry busy. A user-space
++ * IOKitWaitQuiet() (WindowServer's, for one) waits forever and says nothing; waitQuietWithOptions() with a timeout of
++ * at least 41 s prints the busy leaves ("busy timeout[n], (60s): 'name' (state,state), ...") each time it expires.
++ */
++static void
++beringia_busy_watch(void *, wait_result_t)
++{
++	IOSleep(60 * 1000);
++	for (;;) {
++		if (IOService::getServiceRoot()->waitQuietWithOptions(60ULL * NSEC_PER_SEC, 0) == kIOReturnSuccess) {
++			IOLog("BERINGIA: IOKit registry quiet\n");
++			IOSleep(60 * 1000);
++		}
++	}
++}
++
+ class BeringiaPlatform : public IODTPlatformExpert
+ {
+ 	OSDeclareDefaultStructors(BeringiaPlatform);
+@@ -98,6 +115,15 @@ public:
+ 		/* registerNVRAMController also unblocks hw.osenvironment (on Intel, in DEVELOPMENT builds): launchd's
+ 		 * first sysctl of it waits for that. With no NVRAM controller, the platform must do it itself. */
+ 		sysctl_unblock_osenvironment();
++		{
++			uint32_t report = 0;
++			thread_t thread;
++
++			if (PE_parse_boot_argn("beringia_busy_report", &report, sizeof(report)) && report &&
++			    kernel_thread_start(&beringia_busy_watch, NULL, &thread) == KERN_SUCCESS) {
++				thread_deallocate(thread);
++			}
++		}
+ 		return true;
+ 	}
+ 

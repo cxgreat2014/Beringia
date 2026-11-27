@@ -141,6 +141,59 @@ sudo env BERINGIA_NO_BUILD=1 \
 sudo scripts/run/stop.sh
 ```
 
+## 6. The full system (2026-11-27)
+
+With the System image (`$BERINGIA_ASSETS/system.apfs.img`: the 25A353 OTA system tree plus the OS-cryptex runtime
+files, one APFS volume) instead of the recovery image, the same kernel got through these, in order:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| launchd: `vnode is not SIP-protected`, then `Library not loaded: /usr/lib/libobjc.A.dylib` | the loader wrote `csrActiveConfig` without `kBootArgsFlagCSRActiveConfig`, and the Linux-built volume has no `SF_RESTRICTED` flags | flag + `0x6f` |
+| `init_featureflags` SIGABRT: CarbonCore `FileIDTree: volume for device id 0x1000002 already exists` | `/System/Volumes/Preboot` is a directory on the root volume, so it reports the root's device as a second volume (DroidVM hit the same) | patch 0039, `beringia_hide_preboot=1` |
+| `Waiting for DSMOS...` | Apple's DSMOS needs an `AppleSMC` service | `BeringiaSMC`, with the DSMOS key you supply (`BERINGIA_OSK_FILE`, [../setup/macos-assets.md](../setup/macos-assets.md)) |
+| configd, opendirectoryd, remoted, kernelmanagerd blocked in `gethostuuid()`; `registry root held busy, kernelmanagerd has not checked in` | no `IOPlatformUUID`: x86 derives it from `/efi/platform/system-id` | the loader supplies it; patch 0041 |
+| kernel panic in `serializeProperties` from softwareupdated | an `IOPlatformDevice` made from the IODTNVRAM stub, with no property table | patches 0044 (names it) and 0045 (no such nub) |
+| WindowServer blocked in `IOKitWaitQuiet()`: `IOKit Daemon (kernelmanagerd) stall: 'IOUserResources'` (with `beringia_busy_report=1`) | a serial dext matching `IOUserResources` needs `com.apple.driver.driverkit.serial`, which kernelmanagerd would load from the on-disk SystemKC (impossible with a legacy prelinked kernel); `kextlog=0x2f` shows `queued load request to user space` | `IOSerialFamily` + `IOUserSerial` in the prelinked kernel |
+
+Where it stands (run `20261127-160330`): ~130 daemons, the registry goes quiet, and **WindowServer exits with
+`exit(1)` 86 ms after every launch** (launchd's log: `exited due to exit(1), ran for 86ms`, respawn throttled to
+10 s). There is no display device at all, which is the expected reason; its own unified log, which would say, needs
+a tracev3 reader (not built yet). Other crash loops, from their `.ips` reports in `/Library/Logs/DiagnosticReports`:
+
+- `pkd`: `Library not loaded: .../PlugInKitDaemon.framework/Versions/A/PlugInKitDaemon (no such file, not in dyld
+  cache)`. The binary ships in the OS cryptex, and **only 19 runtime files of the OS cryptex payload were staged**
+  (its RIDIFF payload holds 2757 file forks and an APFS template): the image lacks the rest of the cryptex.
+- `coreduetd`: PeopleSuggester `+[_PSConfig _loadPlistNamed:abortOnFailure:]`, a missing resource, probably the same
+  gap.
+- `timed`: an assertion in timed itself; not analysed yet.
+
+launchd's own text log (`/private/var/log/com.apple.xpc.launchd/launchd.log`) and the crash reports can be read from
+Linux with the image mounted read-only (`mount -t apfs -o ro,loop`, linux-apfs-rw), even while XNU runs.
+
+## Reproduce the full-system boot
+
+The KDK part of the kernel collection is [scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts); the two
+Beringia kexts go after it. `BERINGIA_OSK_FILE` (in `local.env`) must name your DSMOS key file
+([../setup/macos-assets.md](../setup/macos-assets.md)), or DSMOS keeps waiting:
+
+```bash
+cd ~/Beringia && . scripts/lib/env.sh
+kexts/BeringiaDisk/build.sh && kexts/BeringiaSMC/build.sh
+mapfile -t kexts < <(grep -v '^#' scripts/kc/full-system.kexts)
+for k in BeringiaDisk BeringiaSMC; do
+  kexts+=("$(realpath --relative-to="$BERINGIA_KDK_EXTENSIONS" "$BERINGIA_BUILD/kexts/$k/$k.kext")")
+done
+scripts/kc/build.sh "${kexts[@]}"
+sudo env BERINGIA_NO_BUILD=1 BERINGIA_KERNEL="$BERINGIA_BUILD/kc/prelinkedkernel" \
+  BERINGIA_DISK="$BERINGIA_ASSETS/system.apfs.img" \
+  BERINGIA_BOOT_ARGS="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1 rd=disk0 beringia_hide_preboot=1 beringia_no_coredump=1" \
+  scripts/run/boot.sh 180
+sudo scripts/run/stop.sh
+```
+
+Add `beringia_busy_report=1` to see what holds the registry busy, `kextlog=0x2f` for kext load requests. The image is
+mounted read-write by macOS: copy it before experiments.
+
 ## Next proof points
 
 1. Complete the Intel runtime and build the System/Data volumes; boot them through BeringiaDisk.

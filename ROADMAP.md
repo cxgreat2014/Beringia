@@ -20,7 +20,8 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
 - 2026-11-27 (audit): the full 25A353 system boots from a 40 GiB APFS image on BeringiaDisk past launchd's early
   boot; kernelmanagerd checks in and ~130 Apple daemons run without a kernel panic. That took the CSR flag, the
   platform UUID from `/efi/platform/system-id`, BeringiaSMC for DSMOS, and removing a registry nub without a property
-  table (patch 0045). WindowServer starts but waits in `IOKitWaitQuiet()`; there is no framebuffer or input yet. The
+  table (patch 0045), plus IOUserSerial for a dext that kept the registry busy. WindowServer now launches and exits
+  at once (`exit(1)`): there is no framebuffer or input yet, and the image still lacks most of the OS cryptex. The
   audit of the M4/M5 work and its fixes: [docs/audit/2026-11-27-m5-session-audit.md](docs/audit/2026-11-27-m5-session-audit.md).
 - 2026-11-27: BeringiaDisk mounts the APFS recovery image as `disk0`. Clearing CR4.UMIP on foreign entry fixes
   launchd's `sidt` #GP, and patch 0038 fixes property-table-less registry nubs; launchd now starts ramrod and

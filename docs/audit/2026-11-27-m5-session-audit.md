@@ -76,7 +76,10 @@ boot. This records what was wrong, what was fixed, and what is still open, so th
 | The docs cited commit `403fa76` for the UMIP fix; that commit is on no branch (it was amended into `f661243`) | **Fixed** |
 | `docs/current-issues.md` still described the recovery image as the stopping point; the CSR, Preboot, UUID and SMC work, BeringiaSMC and patches 0039–0042 existed only in working trees | **Fixed**: committed and documented |
 | `prepare.sh`, and after edits through the Windows share also `boot.sh`, `stop.sh`, `export.sh` and `tests/host/run.sh`, lacked the executable bit | **Fixed** |
-| The system image is hand-built, single-volume, not reproducible, without a pristine copy | **Open**: next step 2 in [../current-issues.md](../current-issues.md); a copy of the image as it was on 2026-11-27 is kept next to it |
+| The system image is hand-built, single-volume, not reproducible, without a pristine copy | **Open**: next step 1 in [../current-issues.md](../current-issues.md); a copy of the image as it was on 2026-11-27 is kept next to it |
+| The image contains only 19 of the OS cryptex's 2757 files (the staging report said so, but the boot work went on as if the runtime were complete) | **Open**: `pkd` and probably `coreduetd` crash-loop on it |
+| The kernel collection's kext list lived only in the build directory | **Fixed**: [scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts) and a recipe in the M5 record, verified by a boot |
+| "WindowServer has not started" was concluded from the console log; it was running (blocked in `IOKitWaitQuiet()`), as the first process-aware thread dump showed | **Fixed** (the thread dump names processes now) |
 
 ## Evidence
 
@@ -87,3 +90,5 @@ boot. This records what was wrong, what was fixed, and what is still open, so th
 | `20261127-150801` | UUID fixed: kernelmanagerd checks in; softwareupdated then panics the kernel in `serializeProperties` |
 | `20261127-151619` | Patch 0044 names the entry: `IOPlatformDevice`, registered from `IODTPlatformExpert::createNubs` |
 | `20261127-153054` | Patch 0045 and the 0032 extension: no entry without a property table, no panic, ~130 daemons; WindowServer waits in `IOKitWaitQuiet()` |
+| `20261127-155310`, `-155806` | `beringia_busy_report=1`: `kernelmanagerd stall: 'IOUserResources'`; `kextlog=0x2f`: `com.apple.driver.driverkit.serial not found; queued load request to user space` |
+| `20261127-160330`, `-161735` | IOSerialFamily + IOUserSerial in the KC (the documented recipe): the registry goes quiet; WindowServer launches and exits with `exit(1)` (no display); `pkd` lacks OS-cryptex content |

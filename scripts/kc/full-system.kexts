@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# The KDK kexts of the full-system prelinked kernel (M5), in link order: bundle paths relative to
+# $BERINGIA_KDK_EXTENSIONS, one per line; '#' lines are comments. scripts/kc/build.sh appends nothing by itself: add
+# BeringiaDisk and BeringiaSMC after these (docs/research/m5-userspace-bringup.md, "Reproduce the full-system boot").
+#
+# Why some of them are here:
+#   AppleSMC + Dont Steal Mac OS X     DSMOS (decrypts protected binaries); BeringiaSMC answers its SMC keys
+#   IOSerialFamily + IOUserSerial      com.apple.driver.driverkit.serial: the serial dexts kernelmanagerd sends match
+#                                      IOUserResources and need it; without it the registry never goes quiet
+#                                      (kernelmanagerd cannot load the on-disk SystemKernelExtensions.kc for us) and
+#                                      WindowServer waits forever in IOKitWaitQuiet()
+pthread.kext
+corecrypto.kext
+CoreTrust.kext
+AppleImage4.kext
+CoreAnalyticsFamily.kext
+AppleMobileFileIntegrity.kext
+IOStorageFamily.kext
+AppleMatch.kext
+Sandbox.kext
+Quarantine.kext
+AppleSystemPolicy.kext
+IOSlaveProcessor.kext
+IOPCIFamily.kext
+AppleSEPManager.kext
+AppleCredentialManager.kext
+IOSCSIArchitectureModelFamily.kext
+IOSCSIArchitectureModelFamily.kext/Contents/PlugIns/IOSCSIBlockCommandsDevice.kext
+watchdog.kext
+IOACPIFamily.kext
+AppleSMC.kext
+AppleBusPowerController.kext
+AppleUSBCommon.kext
+IOUSBHostFamily.kext/Contents/PlugIns/AppleUSBHostMergeProperties.kext
+IOUSBHostFamily.kext/Contents/PlugIns/AppleUSBHostPlatformProperties.kext
+IOUSBHostFamily.kext
+IOUSBMassStorageDriver.kext
+AppleStorageDrivers.kext/Contents/PlugIns/AppleUSBTDM.kext
+AppleKeyStore.kext
+AppleEFIRuntime.kext
+AppleEFIRuntime.kext/Contents/PlugIns/AppleEFINVRAM.kext
+AppleEffaceableStorage.kext
+apfs.kext
+AppleFSCompressionTypeZlib.kext
+AppleFSCompressionTypeDataless.kext
+IOSerialFamily.kext
+IOUserSerial.kext
+Dont Steal Mac OS X.kext

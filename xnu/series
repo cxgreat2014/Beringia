@@ -47,3 +47,4 @@ hosted/0042-include-process-identity-in-thread-dumps.patch
 hosted/0043-sync-the-shared-abi-header-with-the-loader-s-cop.patch
 hosted/0044-name-registry-entries-that-have-no-property-tabl.patch
 hosted/0045-no-platform-nub-for-the-nvram-service.patch
+hosted/0046-report-what-keeps-the-iokit-registry-busy-bring-.patch
