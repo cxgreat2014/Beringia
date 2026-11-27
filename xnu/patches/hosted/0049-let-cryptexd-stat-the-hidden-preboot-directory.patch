@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Sat, 28 Nov 2026 05:40:09 +0800
+Subject: [PATCH] hosted: let cryptexd stat the hidden Preboot directory
+
+With beringia_hide_preboot (patch 0039) a statfs64 of /System/Volumes/Preboot
+returns ENOENT, and cryptexd's codex_init stats exactly that directory before
+it copies grafted cryptexes: stat() succeeds, statfs() fails, and cryptexd
+aborts with "Failed to copy grafted system cryptexes: No such file or
+directory" (EXC_CRASH/SIGABRT), in a launchd respawn loop.
+
+The hide exists for CoreServices' FileIDTree abort, which is not cryptexd's
+path, so current_proc()'s name is exempted. A boot without the hide still
+panics in init_featureflags (run 20261128-053707), so the hide itself stays
+until the image has a real Preboot volume; that volume makes the mount check
+in beringia_preboot_hidden() skip the directory on its own, and this
+exemption becomes inert.
+---
+ bsd/vfs/vfs_syscalls.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 11a5710..65d4707 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -3676,6 +3676,9 @@ quotactl(__unused proc_t p, __unused struct quotactl_args *uap, __unused int32_t
+  * root volume instead of a separate Preboot mount. CoreServices prewarms its
+  * volume cache with statfs64("/System/Volumes/Preboot") and aborts if that
+  * reports the root device a second time. Let it skip this unmounted directory.
++ * cryptexd is exempt: codex_init statfs()s the same directory before it looks
++ * for grafted cryptexes and aborts on ENOENT, which is not the path this hide
++ * exists for (a real Preboot volume makes the mount check below skip it).
+  */
+ static bool
+ beringia_preboot_hidden(vnode_t vp)
+@@ -3692,6 +3695,11 @@ beringia_preboot_hidden(vnode_t vp)
+ 	if (!enabled) {
+ 		return false;
+ 	}
++	proc_t p = current_proc();
++
++	if (p != NULL && p->p_comm[0] != 0 && strcmp(p->p_comm, "cryptexd") == 0) {
++		return false;
++	}
+ 	if (rootvnode == NULLVP || vp->v_mount != rootvnode->v_mount) {
+ 		return false;
+ 	}

@@ -198,9 +198,11 @@ The kernel collection is now 50 kexts, `EndpointSecurity` among them for `endpoi
 each is there, plus BeringiaDisk, BeringiaSMC and BeringiaFramebuffer).
 
 macOS's logd keeps recent entries in memory, so `stop.sh` now ends a run with a real shutdown (patch 0048), and logd
-flushes on the way. Crash loops left: `pkd` and `cryptexd` (OS cryptex content), `mobileassetd`,
-`Kerberos.digest-service`, the `distnoted` agent (`exit(78)`); `timed`, `coreduetd` and (since 2026-11-28, run
-`20261128-051403`) `endpointsecurityd` no longer crash.
+flushes on the way. Crash loops left: `pkd` and `mobileassetd` (both from the missing OS cryptex content),
+`Kerberos.digest-service` and the `distnoted` agent (`exit(78)`) were historical, not seen in recent runs; `timed`,
+`coreduetd`, `endpointsecurityd` (run `20261128-051403`) and `cryptexd` (patch 0049: `codex_init` stats
+`/System/Volumes/Preboot`, which the single-volume image's hide made return ENOENT; run `20261128-054029`) no longer
+crash.
 
 ## Reproduce the full-system boot
 

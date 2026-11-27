@@ -65,8 +65,11 @@ The state as of the audit (2026-11-27), kept for the record:
   forks were staged. `pkd` crash-loops on `PlugInKitDaemon.framework` (not on disk, not in the dyld cache). The App
   cryptex is not staged either. (`coreduetd`'s PeopleSuggester resource was a lost hard link; fixed.)
 - Other crash loops: `timed` (fixed: it was powerd); `fskitd` (fixed: lifs.kext); `endpointsecurityd` (fixed:
-  `EndpointSecurity.kext` in the KC, run `20261128-051403`); `data-protection` (`seputil`, arm64e only) fails with
-  `Bad CPU type`, which is expected on Intel.
+  `EndpointSecurity.kext` in the KC, run `20261128-051403`); `cryptexd` (fixed: patch 0049 exempts it from the
+  Preboot hide, whose statfs64 ENOENT made `codex_init` abort; run `20261128-054029`); `mobileassetd` exits cleanly
+  because `dlopen("/usr/lib/libmobileassetd.dylib")` fails — the missing OS cryptex content; the `distnoted`
+  `exit(78)` loop and `Kerberos.digest-service` reports were historical (per-user uid without an account, and an
+  on-demand job). `data-protection` (`seputil`, arm64e only) fails with `Bad CPU type`, which is expected on Intel.
 - A self-written unsigned `/sbin/launchd` is rejected by AMFI ("The system only allows platform binaries").
 
 ## Important fixes in this round
