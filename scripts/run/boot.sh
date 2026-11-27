@@ -18,11 +18,24 @@
 #   BERINGIA_OSK_FILE=PATH         the DSMOS key from your own Mac, for BeringiaSMC (docs/setup/macos-assets.md)
 #   BERINGIA_FB=WIDTHxHEIGHT       the boot framebuffer (default: the loader's, 1280x800; empty for none), shown by
 #                                  tools/debug/fbshot.py through /dev/beringia-fb
+#   BERINGIA_GOLDEN=PATH           with no BERINGIA_DISK: boot a fresh copy of this image (scripts/run/disk-copy.sh)
+#   BERINGIA_RUN_ID=ID             use this run id (scripts/run/experiment.sh sets it); default: the date and time
+#
+# One run at a time: boot.sh and stop.sh serialize on /run/beringia/run.lock, and boot.sh refuses to start while the
+# modules of an earlier run are still loaded (end that run with stop.sh first; it keeps its own evidence).
 set -euo pipefail
 . "$(dirname "$0")/../lib/env.sh"
 [ "$(id -u)" = 0 ] || die "run as root (wsl -u root)"
 : "${BERINGIA_CARVE:?set BERINGIA_CARVE to the memmap= reservations (docs/setup/wsl2.md)}"
 secs=${1:-10}
+
+mkdir -p /run/beringia
+exec 9>/run/beringia/run.lock
+flock -w "${BERINGIA_LOCK_WAIT:-600}" 9 || die "another boot.sh or stop.sh holds /run/beringia/run.lock"
+if grep -q -E '^beringia_(xnu|host) ' /proc/modules; then
+	die "a run is still active (the Beringia modules are loaded; ${BERINGIA_WIN_DIR:+see $BERINGIA_WIN_DIR/run/armed, }end it with scripts/run/stop.sh)"
+fi
+run_id=${BERINGIA_RUN_ID:-$(date +%Y%m%d-%H%M%S)}
 
 if [ "${BERINGIA_NO_BUILD:-0}" != 1 ]; then
 	# Build as the owner of the tree, never as root: root-owned objects break the next build as the normal user.
@@ -42,6 +55,10 @@ if [ -n "${BERINGIA_RAMDISK:-}" ]; then
 	ramdisk_param="ramdisk=/lib/firmware/beringia/ramdisk"
 fi
 disk_param=
+if [ -z "${BERINGIA_DISK:-}" ] && [ -n "${BERINGIA_GOLDEN:-}" ]; then
+	log "copying the golden image for run $run_id"
+	BERINGIA_DISK=$("$BERINGIA_ROOT/scripts/run/disk-copy.sh" "$run_id")
+fi
 if [ -n "${BERINGIA_DISK:-}" ]; then
 	[ -f "$BERINGIA_DISK" ] || die "no disk image at $BERINGIA_DISK"
 	disk_param="disk=$BERINGIA_DISK"
@@ -55,7 +72,6 @@ fb_param=
 [ -z "${BERINGIA_FB+set}" ] || fb_param="fb=$BERINGIA_FB"
 
 # The per-run directory on the Windows side: never reused, so one run's evidence is not overwritten by the next.
-run_id=$(date +%Y%m%d-%H%M%S)
 run_dir=
 if [ -n "${BERINGIA_WIN_DIR:-}" ]; then
 	run_dir=$BERINGIA_WIN_DIR/runs/$run_id
@@ -75,6 +91,8 @@ if [ -n "${BERINGIA_WIN_DIR:-}" ]; then
 		echo "boot_args=${BERINGIA_BOOT_ARGS:-<loader default>}"
 		echo "ramdisk=${BERINGIA_RAMDISK:-<none>}"
 		echo "disk=${BERINGIA_DISK:-<none>}"
+		echo "golden=${BERINGIA_GOLDEN:-<none>}"
+		[ -z "${BERINGIA_NOTE:-}" ] || echo "note=$BERINGIA_NOTE"
 		echo "dsmos_key=$([ -n "$osk_param" ] && echo supplied || echo none)"
 		echo "fb=${BERINGIA_FB-<loader default>}"
 		echo "linux_cpu=${BERINGIA_LINUX_CPU:-1}"
@@ -105,8 +123,6 @@ fi
 # (.wslconfig wsl2.debugConsoleLogFile) even when the guest is wedged.
 dmesg -n 7
 
-rmmod beringia_xnu 2>/dev/null || true
-rmmod beringia_host 2>/dev/null || true
 dmesg -C
 [ -z "${BERINGIA_TRACE:-}" ] || : > "$BERINGIA_TRACE"
 
@@ -141,6 +157,7 @@ insmod "$BERINGIA_ROOT/host/beringia_host.ko" carve="$BERINGIA_CARVE" ${BERINGIA
 insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" ${ramdisk_param:+"$ramdisk_param"} ${disk_param:+"$disk_param"} ${osk_param:+"$osk_param"} \
 	${fb_param:+"$fb_param"} ${BERINGIA_BOOT_ARGS:+"boot_args=\"$BERINGIA_BOOT_ARGS\""}
 trap - EXIT
+flock -u 9	# the loaded modules now mark the run as active; stop.sh may take the lock
 sleep "$secs"
 dmesg | grep -E "beringia|BUG:|Oops:|RIP:|WARNING:|rcu:|watchdog:" | tail -200
 [ -z "$run_dir" ] || { dmesg > "$run_dir/dmesg.txt"; echo "run $run_id: $run_dir (watchdog armed; scripts/run/stop.sh to end)"; }

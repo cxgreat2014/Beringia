@@ -8,6 +8,11 @@ set -uo pipefail
 . "$(dirname "$0")/../lib/env.sh"
 [ "$(id -u)" = 0 ] || die "run as root (wsl -u root)"
 
+# serialized with boot.sh (which holds the lock only while it loads the modules)
+mkdir -p /run/beringia
+exec 9>/run/beringia/run.lock
+flock -w "${BERINGIA_LOCK_WAIT:-600}" 9 || die "another boot.sh or stop.sh holds /run/beringia/run.lock"
+
 loaded() { grep -q -E '^beringia_(xnu|host) ' /proc/modules; }
 
 arm=${BERINGIA_WIN_DIR:+$BERINGIA_WIN_DIR/run/armed}

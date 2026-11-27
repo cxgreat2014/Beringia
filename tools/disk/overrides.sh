@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Bring-up changes to the macOS system image for a machine without the hardware macOS takes for granted.
 #
-#   sudo tools/disk/overrides.sh [--undo] [IMAGE]       IMAGE defaults to $BERINGIA_DISK or $BERINGIA_ASSETS/system.apfs.img
+#   sudo tools/disk/overrides.sh [--undo] [IMAGE]       IMAGE defaults to $BERINGIA_DISK, else $BERINGIA_GOLDEN
+#
+# The golden image is chattr +i: lift that for the change (chattr -i), put it back after (chattr +i).
 #
 # Idempotent; --undo restores what it changed. Each change and why:
 #   bluetoothd disabled (/private/var/db/com.apple.xpc.launchd/disabled.plist): there is no Bluetooth controller, so
@@ -23,37 +25,26 @@ if [ "${1:-}" = --undo ]; then
 fi
 [ "$(id -u)" = 0 ] || die "run as root (mount)"
 grep -q '^beringia_xnu ' /proc/modules && die "beringia_xnu is loaded: end the run first (scripts/run/stop.sh)"
-img=${1:-${BERINGIA_DISK:-$BERINGIA_ASSETS/system.apfs.img}}
-[ -f "$img" ] || die "no image $img"
+img=${1:-${BERINGIA_DISK:-${BERINGIA_GOLDEN:-}}}
+[ -n "$img" ] && [ -f "$img" ] || die "no image ${img:-given (IMAGE, BERINGIA_DISK or BERINGIA_GOLDEN)}"
+! lsattr -d "$img" 2>/dev/null | cut -d' ' -f1 | grep -q i || die "$img is immutable (chattr +i): chattr -i it first"
 if ! grep -q '^apfs ' /proc/modules; then
 	if [ -n "${BERINGIA_APFS_KO:-}" ]; then insmod "$BERINGIA_APFS_KO"; else modprobe apfs; fi
 fi
 
-unshare -m --propagation private bash -s "$img" "$undo" <<'EOF'
+unshare -m --propagation private bash -s "$img" "$undo" "$(cd "$(dirname "$0")" && pwd)" <<'EOF'
 set -euo pipefail
-img=$1 undo=$2
+img=$1 undo=$2 here=$3
 mnt=$(mktemp -d)
 mount -t apfs -o readwrite,loop "$img" "$mnt"
 trap 'sync; umount "$mnt"; rmdir "$mnt"' EXIT
 grep -q " $mnt apfs rw" /proc/mounts || { echo "error: $img did not mount read-write" >&2; exit 1; }
 
-disabled=$mnt/private/var/db/com.apple.xpc.launchd/disabled.plist
-python3 -I - "$disabled" "$undo" <<'PY'
-import os, plistlib, sys
-path, undo = sys.argv[1], sys.argv[2] == "1"
-d, fmt = {}, plistlib.FMT_XML
-if os.path.exists(path):
-    raw = open(path, "rb").read()
-    fmt = plistlib.FMT_BINARY if raw.startswith(b"bplist") else plistlib.FMT_XML
-    d = plistlib.loads(raw)
-if undo:
-    d.pop("com.apple.bluetoothd", None)
-else:
-    d["com.apple.bluetoothd"] = True
-with open(path, "wb") as f:
-    plistlib.dump(d, f, fmt=fmt)
-print("disabled.plist:", sorted(k for k, v in d.items() if v))
-PY
+if [ "$undo" = 1 ]; then
+	python3 -I "$here/launchd-disabled.py" --undo com.apple.bluetoothd "$mnt"
+else
+	python3 -I "$here/launchd-disabled.py" com.apple.bluetoothd "$mnt"
+fi
 
 hal=$mnt/System/Library/Audio/Plug-Ins/HAL
 off=$mnt/System/Library/Audio/Plug-Ins/HAL.beringia-disabled

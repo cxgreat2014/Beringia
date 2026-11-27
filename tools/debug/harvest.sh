@@ -5,9 +5,9 @@
 #
 #   sudo tools/debug/harvest.sh [--clear] [IMAGE] [OUTDIR]
 #
-# IMAGE defaults to $BERINGIA_DISK or $BERINGIA_ASSETS/system.apfs.img; OUTDIR to "macos-logs" in the newest run
-# directory under $BERINGIA_WIN_DIR/runs. --clear then empties the image's unified log, launchd log and crash reports,
-# so that the next run's logs are its own (the image keeps every boot's otherwise, and decoding them all gets slow).
+# OUTDIR defaults to "macos-logs" in the newest run directory under $BERINGIA_WIN_DIR/runs, IMAGE to the disk that run
+# booted (its meta.txt: with BERINGIA_GOLDEN, the run's own copy), else $BERINGIA_DISK. --clear then empties the
+# image's unified log, launchd log and crash reports, for an image that is booted again (a per-run copy needs none).
 #
 # The image is mounted with the linux-apfs-rw driver ($BERINGIA_APFS_KO, or an apfs module already loaded/installed)
 # in a private mount namespace, so the mount does not leak into other namespaces (WSL services hold copies of shared
@@ -28,13 +28,20 @@ if [ "${1:-}" = --clear ]; then
 fi
 [ "$(id -u)" = 0 ] || die "run as root (mount)"
 grep -q '^beringia_xnu ' /proc/modules && die "beringia_xnu is loaded: end the run first (scripts/run/stop.sh)"
-img=${1:-${BERINGIA_DISK:-$BERINGIA_ASSETS/system.apfs.img}}
-[ -f "$img" ] || die "no image $img"
+last=
+if [ -n "${BERINGIA_WIN_DIR:-}" ] && [ -d "$BERINGIA_WIN_DIR/runs" ]; then
+	# run ids are timestamps (YYYYmmdd-HHMMSS), so the last one in sort order is the newest run
+	last=$(find "$BERINGIA_WIN_DIR/runs" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
+fi
+img=${1:-}
+if [ -z "$img" ] && [ -n "$last" ] && [ -f "$last/meta.txt" ]; then
+	img=$(sed -n 's/^disk=//p' "$last/meta.txt")
+fi
+[ -n "$img" ] && [ "$img" != "<none>" ] || img=${BERINGIA_DISK:-}
+[ -n "$img" ] && [ -f "$img" ] || die "no image ${img:-given, none in the meta.txt of the newest run, no BERINGIA_DISK}"
 out=${2:-}
 if [ -z "$out" ]; then
-	# run ids are timestamps (YYYYmmdd-HHMMSS), so the last one in sort order is the newest run
-	last=$(find "${BERINGIA_WIN_DIR:?no OUTDIR and no BERINGIA_WIN_DIR}/runs" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
-	[ -n "$last" ] || die "no run directory under $BERINGIA_WIN_DIR/runs"
+	[ -n "$last" ] || die "no OUTDIR and no run directory under \$BERINGIA_WIN_DIR/runs"
 	out=$last/macos-logs
 fi
 mkdir -p "$out"
@@ -80,10 +87,17 @@ copy Library/Logs/DiagnosticReports "$dst/DiagnosticReports"
 copy private/var/db/uuidtext "$dst/logarchive"
 copy private/var/db/diagnostics "$dst/logarchive"
 if [ "$clear" = 1 ]; then
-	# the logs, not the structure: logd recreates its files; uuidtext stays (it describes the binaries, not a boot)
-	find "$mnt/private/var/db/diagnostics" -type f \( -name '*.tracev3' -o -name '*.timesync' \) -delete
-	find "$mnt/private/var/log/com.apple.xpc.launchd" -type f -name 'launchd.log*' -delete
-	find "$mnt/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -name '*.ips' -delete
+	# the logs, not the structure: logd recreates its files; uuidtext stays (it describes the binaries, not a boot).
+	# A missing directory is not an error: the logs were copied above, and aborting here would lose them with $scratch.
+	clear_dir() { dir=$1
+		shift
+		if [ -d "$dir" ]; then
+			find "$dir" "$@" || echo "warning: could not empty $dir" >&2
+		fi
+	}
+	clear_dir "$mnt/private/var/db/diagnostics" -type f \( -name '*.tracev3' -o -name '*.timesync' \) -delete
+	clear_dir "$mnt/private/var/log/com.apple.xpc.launchd" -type f -name 'launchd.log*' -delete
+	clear_dir "$mnt/Library/Logs/DiagnosticReports" -maxdepth 1 -type f -name '*.ips' -delete
 	echo "cleared the image's unified log, launchd log and crash reports"
 fi
 EOF
