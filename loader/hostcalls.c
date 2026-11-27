@@ -142,7 +142,9 @@ static void ldr_timer_fire(int cpu)
 		bh_logf("xnu: host timer fire %lu cpu %d", fire_count, cpu);
 }
 
+/* per hosted CPU: only that CPU's thread runs its host calls (static, not on the stack: 2 KiB each) */
 static char console_buf[BERINGIA_MAX_CPUS][sizeof(((struct beringia_cpu_shared *)0)->console) + 1];
+static char console_full[BERINGIA_MAX_CPUS][sizeof(console_buf[0]) + 16];
 
 static void console_line(int cpu, unsigned long len, const char *prefix)
 {
@@ -151,12 +153,8 @@ static void console_line(int cpu, unsigned long len, const char *prefix)
 	len = min_t(unsigned long, len, sizeof(console_buf[0]) - 1);
 	memcpy(buf, ldr.shared->cpu[cpu].console, len);
 	buf[len] = 0;
-	{
-		char full[sizeof(console_buf[0]) + 16];
-
-		snprintf(full, sizeof(full), "%s%d: %s", prefix, cpu, buf);
-		bh_console(full);
-	}
+	snprintf(console_full[cpu], sizeof(console_full[0]), "%s%d: %s", prefix, cpu, buf);
+	bh_console(console_full[cpu]);
 }
 
 long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
