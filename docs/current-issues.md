@@ -18,8 +18,13 @@ there is no input. How each blocker on the way was found and fixed:
 - The legacy prelinked kernel links **48 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
   (security, storage, APFS, AppleSMC, DSMOS, serial, HID, graphics, GPU wrangler, IOSurface, LiveFS) plus
   `BeringiaDisk` and `BeringiaSMC`; the recipe is in [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
-- The display is the loader's boot framebuffer (`fb=WxH`, default 1280x800), driven by IONDRVSupport's
-  `IONDRVFramebuffer`/`IOBootNDRV` through the device-tree node `/display`. No GPU, no Metal device.
+- The display is the loader's boot framebuffer (`fb=WxH`, default 1280x800), driven through the device-tree node
+  `/display` by `BeringiaFramebuffer` (one fully described 60 Hz mode, an EDID; it opens itself at boot so the display
+  is attached before WindowServer looks). CoreDisplay now accepts the mode (`Mode has dimensions 1280x800`, run
+  `20261128-035849`) and WindowServer orders Language Chooser's window front, **but only the cursor reaches the
+  screen**: WindowServer cannot register `com.apple.CARenderServer`, the display ID stays 0, and an `Installer
+  Progress` app runs as well. No GPU, no Metal device. Without BeringiaFramebuffer, IONDRVSupport's
+  `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps that display offline.
 - The image had lost **23 427 hard-linked file names** in extraction (powerd's launchd plist among them, so powerd
   never ran); `tools/disk/mtree.py` restored them from the OTA's mtree. bluetoothd is disabled in the image for now:
   with no Bluetooth controller it never answers, and its clients (Language Chooser) waited forever.
@@ -115,8 +120,9 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 
 ## Next steps, in order
 
-1. Get Language Chooser's window (and then loginwindow's) onto the screen: find out whether it is never ordered in or
-   WindowServer does not composite it without a Metal device.
+1. Get Language Chooser's window (and then loginwindow's) onto the screen. It is ordered front on a configured
+   display; find out why WindowServer does not composite into the framebuffer (its render server port, no Metal
+   device, the display ID 0, the Installer Progress shield).
 2. Input: a keyboard and an absolute pointer the HID system accepts, fed from a viewer on the Windows side; a live
    viewer instead of screenshots.
 3. Make the system image reproducible from this repository (`tools/disk/`): the hard-link repair and the launchd

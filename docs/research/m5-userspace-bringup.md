@@ -188,10 +188,16 @@ Linux (`tools/debug/harvest.sh`); user-space backtraces in the thread dump, name
 | loginwindow: `usleep` loop in `main`, waiting for a flag (code peeked from memory: the binary is DSMOS-encrypted on disk) | it runs Language Chooser on a fresh system and waits for it | (expected on first boot) |
 | Language Chooser: `-[IOBluetoothHostController defaultController]` waits on a semaphore | bluetoothd waits forever for an `IOBluetoothHCIController` (`Couldn't find IOBluetoothHCIController service, waiting for it to appear`); clients wait for bluetoothd | experiment: `com.apple.bluetoothd` disabled in the image's `/private/var/db/com.apple.xpc.launchd/disabled.plist` |
 | then `LUICopyDefaultDesktopPicture` → StorageKit `syncAllDisks` → diskarbitrationd → FSKit `-[FSClient setupConnection]`; fskitd exits: `get client returned E0000001` / `sending mach port to kernel` | no LiveFS kernel extension | lifs.kext |
-| Language Chooser idle in `-[NSApplication run]`; WindowServer has replaced the boot screen with black and the cursor (run `20261128-023734`) | | next: why its window does not reach the screen |
+| Language Chooser idle in `-[NSApplication run]`; WindowServer has replaced the boot screen with black and the cursor (run `20261128-023734`) | | |
+| coreaudiod writes 1.6 million log entries in four minutes: `Register audio plugin connection with bluetoothd` / `Connection invalid` | its BTAudioHALPlugin retries without pause once bluetoothd is disabled | `tools/disk/overrides.sh` also moves the plug-in aside |
+| black screen: CoreDisplay `IOFBSetDisplayModeAndDepth: Setting mode 0x0` / `Failed to obtain mode info`, `Setting main display ... offline in CGXConstructVirtualFramebuffer`: WindowServer composites into a virtual framebuffer | CoreDisplay's port of IOGraphicsLib (disassembled from the shared cache) calls a connection usable only if an `IODisplay` already sits under the framebuffer when it looks; the display attaches only once the framebuffer is opened, i.e. after WindowServer looked. IOBootNDRV also describes its one mode poorly (refresh 0, no timing, no EDID) | `BeringiaFramebuffer` (an IOFramebuffer with a 60 Hz detailed timing and an EDID) that opens itself at boot and raises the connect-change interrupt when the display attaches: CoreDisplay then sets mode 1, `Mode has dimensions 1280x800` (run `20261128-035849`) |
+| the screen is still black, with the cursor; WindowServer orders Language Chooser's window front | open: WindowServer cannot register `com.apple.CARenderServer` (`Operation already in progress`), the display ID stays 0, and an `Installer Progress` app is running too | next |
 
-The kernel collection is now 48 kexts ([scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts) says why
-each is there). Crash loops left: `pkd` (OS cryptex content), `mobileassetd`, `Kerberos.digest-service`, the
+The kernel collection is now 49 kexts ([scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts) says why
+each is there, plus BeringiaDisk, BeringiaSMC and BeringiaFramebuffer).
+
+macOS's logd keeps recent entries in memory and the run ends without a shutdown, so the harvested unified log can
+miss the last minutes: let a run go on for a while before stopping it when its last messages matter. Crash loops left: `pkd` (OS cryptex content), `mobileassetd`, `Kerberos.digest-service`, the
 `distnoted` agent (`exit(78)`), `endpointsecurityd` (no EndpointSecurity kext); `timed` and `coreduetd` no longer
 crash.
 
@@ -203,9 +209,9 @@ Beringia kexts go after it. `BERINGIA_OSK_FILE` (in `local.env`) must name your 
 
 ```bash
 cd ~/Beringia && . scripts/lib/env.sh
-kexts/BeringiaDisk/build.sh && kexts/BeringiaSMC/build.sh
+kexts/BeringiaDisk/build.sh && kexts/BeringiaSMC/build.sh && kexts/BeringiaFramebuffer/build.sh
 mapfile -t kexts < <(grep -v '^#' scripts/kc/full-system.kexts)
-for k in BeringiaDisk BeringiaSMC; do
+for k in BeringiaDisk BeringiaSMC BeringiaFramebuffer; do
   kexts+=("$(realpath --relative-to="$BERINGIA_KDK_EXTENSIONS" "$BERINGIA_BUILD/kexts/$k/$k.kext")")
 done
 scripts/kc/build.sh "${kexts[@]}"
@@ -221,8 +227,9 @@ mounted read-write by macOS: copy it before experiments.
 
 Two changes to the image are part of the 2026-11-28 state (section 7), until the image builder does them: the lost
 hard links restored with `tools/disk/mtree.py check MTREE ROOT --fix-hardlinks` (on the image mounted read-write, or on
-the staging tree before the image is built), and `com.apple.bluetoothd` set to `true` in
-`/private/var/db/com.apple.xpc.launchd/disabled.plist`. The loader's framebuffer is on by default (`BERINGIA_FB`).
+the staging tree before the image is built), and `sudo tools/disk/overrides.sh` (bluetoothd disabled, coreaudiod's
+Bluetooth audio plug-in moved aside; `--undo` reverts). The loader's framebuffer is on by default (`BERINGIA_FB`);
+`BeringiaFramebuffer` drives it, IONDRVSupport's `IONDRVFramebuffer` takes over if that kext is not in the KC.
 
 ## Next proof points
 

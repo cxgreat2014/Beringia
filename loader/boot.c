@@ -160,15 +160,17 @@ static u64 build_dt(u8 *base, u64 room)
 	}
 	if (ldr.fb_size) {
 		/*
-		 * The display the boot framebuffer belongs to. The platform expert makes an IOPlatformDevice of it, which
-		 * IONDRVSupport's IONDRVFramebuffer matches by name ("display"); with no NDRV in the device it falls back to
-		 * IOBootNDRV, which drives the boot framebuffer (boot_args Video) when one of the device's memory ranges
-		 * ("reg": address hi, lo; size) contains it. "AAPL,boot-display" makes it the console device.
+		 * The display the boot framebuffer belongs to. The platform expert makes an IOPlatformDevice of it. The
+		 * BeringiaFramebuffer kext matches it by "compatible"; without that kext IONDRVSupport's IONDRVFramebuffer
+		 * matches it by name ("display") and, with no NDRV in the device, drives the boot framebuffer (boot_args
+		 * Video) through IOBootNDRV. Both need one of the device's memory ranges ("reg": address hi, lo; size) to
+		 * contain it. "AAPL,boot-display" makes it the console device.
 		 */
 		u32 reg[3] = { (u32)(ldr.fb_pa >> 32), (u32)ldr.fb_pa, (u32)ldr.fb_size };
 
-		dt_node(&b, 4, 0);
+		dt_node(&b, 5, 0);
 		dt_str(&b, "name", "display");
+		dt_str(&b, "compatible", "beringia,framebuffer");
 		dt_str(&b, "device_type", "display");
 		dt_prop(&b, "reg", reg, sizeof(reg));
 		dt_prop(&b, "AAPL,boot-display", NULL, 0);
