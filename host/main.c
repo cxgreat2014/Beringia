@@ -244,6 +244,7 @@ static void __exit bh_exit(void)
 {
 	bh_cpu_stop_all();
 	bh_cpu_exit();
+	bh_fb_unpublish();	/* normally the loader's job; never leave the device pointing at unmapped memory */
 	bh_mem_exit();
 	bh_log("beringia_host unloaded");
 	flush_work(&trace_work);

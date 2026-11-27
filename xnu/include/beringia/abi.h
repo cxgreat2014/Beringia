@@ -20,7 +20,7 @@
 #ifndef BERINGIA_ABI_H
 #define BERINGIA_ABI_H
 
-#define BERINGIA_ABI_VERSION    1       /* block calls 34/35 are part of version 1 */
+#define BERINGIA_ABI_VERSION    2       /* 1: block calls 34/35; 2: beringia_shared.dump_filter */
 #define BERINGIA_KERNEL_BASE    0xffffff8000000000ULL   /* x86_64 XNU KERNEL_BASE: image PA = VA - this */
 #define BERINGIA_MAX_CPUS       64
 
@@ -77,6 +77,11 @@ struct beringia_shared {
 	unsigned long long phys_top;        /* highest physical address (exclusive) of XNU's RAM: the physmap covers it */
 	/* per CPU */
 	struct beringia_cpu_shared cpu[BERINGIA_MAX_CPUS];
+	/* bring-up, set by the host before BERINGIA_PENDING_DUMP: the thread dump also prints the user-space state and
+	 * frame-pointer backtrace of threads whose process name contains this string ("*": every process; "" or "1":
+	 * kernel stacks only); "peek:PID:ADDR:LEN" prints LEN (<= 4096) bytes of that process's memory instead.
+	 * NUL-terminated. Appended last: the offsets above do not change. */
+	char dump_filter[32];
 };
 
 /* BERINGIA_CALL_CPU_START: where a secondary CPU enters XNU. */

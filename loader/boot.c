@@ -56,7 +56,7 @@ static void dt_prop(struct dt_builder *b, const char *name, const void *val, u32
 	strscpy(p->name, name, sizeof(p->name));
 	p->length = len;
 	v = dt_put(b, (len + 3) & ~3U);
-	if (v)
+	if (v && len)
 		memcpy(v, val, len);
 }
 
@@ -89,15 +89,25 @@ static u8 *dt_debug_walk(u8 *p, int depth)
 	return q;
 }
 
-/* /, /chosen, /chosen/memory-map, /efi, /efi/platform */
+static void dt_u32(struct dt_builder *b, const char *name, u32 v)
+{
+	dt_prop(b, name, &v, sizeof(v));
+}
+
+/* /, /chosen, /chosen/memory-map, /efi, /efi/platform, /options[, /display] */
 static u64 build_dt(u8 *base, u64 room)
 {
 	struct dt_builder b = { base, base, base + room };
 
-	dt_node(&b, 3, 3);
+	/* with a framebuffer: the cell sizes /display's "reg" is read with (IODTResolveAddressing) */
+	dt_node(&b, ldr.fb_size ? 5 : 3, ldr.fb_size ? 4 : 3);
 	dt_str(&b, "name", "device-tree");
 	dt_str(&b, "compatible", "Beringia1,1");
 	dt_str(&b, "model", "Beringia1,1");
+	if (ldr.fb_size) {
+		dt_u32(&b, "#address-cells", 2);
+		dt_u32(&b, "#size-cells", 1);
+	}
 	{
 		u8 seed[64];
 
@@ -148,7 +158,57 @@ static u64 build_dt(u8 *base, u64 room)
 		dt_str(&b, "name", "options");
 		dt_str(&b, "boot-args", "");
 	}
+	if (ldr.fb_size) {
+		/*
+		 * The display the boot framebuffer belongs to. The platform expert makes an IOPlatformDevice of it, which
+		 * IONDRVSupport's IONDRVFramebuffer matches by name ("display"); with no NDRV in the device it falls back to
+		 * IOBootNDRV, which drives the boot framebuffer (boot_args Video) when one of the device's memory ranges
+		 * ("reg": address hi, lo; size) contains it. "AAPL,boot-display" makes it the console device.
+		 */
+		u32 reg[3] = { (u32)(ldr.fb_pa >> 32), (u32)ldr.fb_pa, (u32)ldr.fb_size };
+
+		dt_node(&b, 4, 0);
+		dt_str(&b, "name", "display");
+		dt_str(&b, "device_type", "display");
+		dt_prop(&b, "reg", reg, sizeof(reg));
+		dt_prop(&b, "AAPL,boot-display", NULL, 0);
+	}
 	return b.p - b.base;
+}
+
+/*
+ * The boot framebuffer (loader fb=WxH): 32 bpp, at the top of the low carve-out, taken out of the RAM XNU is given
+ * (it is not in the EFI memory map, like a real one), so XNU maps it as device memory. Linux reads the same memory
+ * through /dev/beringia-fb (bh_fb_publish, after the boot environment is built).
+ */
+static int reserve_fb(void)
+{
+	u64 size, top = ldr.low.pa + ldr.low.size, j;
+	u32 *px;
+	int i;
+
+	if (!ldr.fb_width)
+		return 0;
+	ldr.fb_stride = ldr.fb_width * 4;
+	size = ((u64)ldr.fb_stride * ldr.fb_height + (2ULL << 20) - 1) & ~((2ULL << 20) - 1);
+	if (size > ldr.low.size / 8 || top - size < ldr.physfree) {
+		bh_logf("xnu: no room for a %ux%u framebuffer in the low carve-out", ldr.fb_width, ldr.fb_height);
+		return -ENOSPC;
+	}
+	px = bh_phys(top - size, size);
+	if (!px)
+		return -EFAULT;
+	for (i = 0; i < ldr.nranges; i++)
+		if (ldr.ranges[i].pa == ldr.low.pa)
+			ldr.ranges[i].size -= size;
+	ldr.low.size -= size;
+	ldr.fb_pa = top - size;
+	ldr.fb_size = size;
+	/* a dark grey, not black: a screenshot of it shows the device works before XNU draws anything */
+	for (j = 0; j < size / 4; j++)
+		px[j] = 0x00303030;
+	bh_logf("xnu: framebuffer %ux%u at PA %#llx (%llu KiB)", ldr.fb_width, ldr.fb_height, ldr.fb_pa, size >> 10);
+	return 0;
 }
 
 /* ---- page tables for vstart ---- */
@@ -296,6 +356,9 @@ int ldr_boot_build(const char *cmdline)
 	mm = bh_phys(ldr.memmap_pa, 4096);
 	if (!ba || !mm || !bh_phys(ldr.dt_pa, 16384) || ldr.physfree > ldr.low.pa + ldr.low.size)
 		return -ENOSPC;
+	err = reserve_fb();	/* first: it shrinks the low range the RAM disk must fit in */
+	if (err)
+		return err;
 	err = load_ramdisk();
 	if (err)
 		return err;
@@ -343,6 +406,14 @@ int ldr_boot_build(const char *cmdline)
 	ba->MemoryMapDescriptorVersion = 1;
 	ba->deviceTreeP = ldr.dt_pa;
 	ba->deviceTreeLength = ldr.dt_len;
+	if (ldr.fb_size) {
+		ba->Video.v_display = 1;	/* GRAPHICS_MODE */
+		ba->Video.v_rowBytes = ldr.fb_stride;
+		ba->Video.v_width = ldr.fb_width;
+		ba->Video.v_height = ldr.fb_height;
+		ba->Video.v_depth = 32;
+		ba->Video.v_baseAddr = ldr.fb_pa;
+	}
 	/* debug: walk the DT and log every node's name, to verify /options is present */
 	{
 		u8 *base = bh_phys(ldr.dt_pa, ldr.dt_len);

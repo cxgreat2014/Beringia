@@ -23,6 +23,9 @@ struct ldr {
 	int disk_read_only;             /* disk= was opened read-only */
 	u8 osk[64];                     /* the DSMOS key the user supplied (osk=FILE), for BeringiaSMC; never built in */
 	int have_osk;
+	u32 fb_width, fb_height;        /* the boot framebuffer (fb=WxH), XRGB8888; 0: none */
+	u32 fb_stride;                  /* bytes per row */
+	u64 fb_pa, fb_size;             /* taken from the top of the low carve-out, outside XNU's RAM */
 	u64 sym_vstart, sym_stack, sym_hook, sym_shared;     /* slid virtual addresses */
 	struct beringia_shared *shared; /* host address of XNU's beringia_shared */
 	unsigned int ncpus;

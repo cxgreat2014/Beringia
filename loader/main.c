@@ -9,6 +9,7 @@
  *   ramdisk=PATH      an image copied into XNU's RAM for memdev
  *   disk=PATH         a host-file-backed block device for BeringiaDisk (unit 0)
  *   linux_cpu=N       the Linux CPU that runs hosted CPU 0 (default 1)
+ *   fb=WxH            the boot framebuffer (default 1280x800, "" for none), readable as /dev/beringia-fb
  *
  * This module uses Linux only through beringia_host.ko's interface (host.h) and the module ABI.
  */
@@ -33,16 +34,29 @@ module_param(linux_cpu, int, 0444);
 static char *osk = "";
 module_param(osk, charp, 0);
 MODULE_PARM_DESC(osk, "a file with the 64-character DSMOS key (OSK0 then OSK1) from your own Mac, for BeringiaSMC");
+static char *fb = "1280x800";
+module_param(fb, charp, 0444);
+MODULE_PARM_DESC(fb, "the boot framebuffer, WIDTHxHEIGHT at 32 bpp (/dev/beringia-fb); \"\" or 0 for none");
 
 struct ldr ldr;
 
-/* Bring-up: `echo 1 > /sys/module/beringia_xnu/parameters/dump` makes every hosted CPU print its threads. */
+/*
+ * Bring-up: `echo 1 > /sys/module/beringia_xnu/parameters/dump` makes every hosted CPU print its threads (kernel
+ * stacks); `echo WindowServer > ...` also prints the user-space backtraces of processes whose name contains that
+ * string, `echo '*' > ...` those of every process.
+ */
 static int dump_set(const char *val, const struct kernel_param *kp)
 {
+	size_t n;
 	int i;
 
 	if (!ldr.shared)
 		return -ENODEV;
+	n = strcspn(val, "\n");
+	if (n >= sizeof(ldr.shared->dump_filter))
+		return -EINVAL;
+	memset(ldr.shared->dump_filter, 0, sizeof(ldr.shared->dump_filter));
+	memcpy(ldr.shared->dump_filter, val, n);
 	for (i = 0; i < ldr.ncpus; i++) {
 		__atomic_fetch_or(&ldr.shared->cpu[i].pending, BERINGIA_PENDING_DUMP, __ATOMIC_SEQ_CST);
 		bh_kick(i);
@@ -173,6 +187,22 @@ static int read_osk(void)
 	return 0;
 }
 
+static int parse_fb(void)
+{
+	unsigned int w, h;
+	char end;
+
+	if (!fb[0] || !strcmp(fb, "0"))
+		return 0;
+	if (sscanf(fb, "%ux%u%c", &w, &h, &end) != 2 || w < 640 || h < 480 || w > 4096 || h > 4096 || (w & 7)) {
+		bh_logf("xnu: fb=%s: want WIDTHxHEIGHT from 640x480 to 4096x4096, the width a multiple of 8", fb);
+		return -EINVAL;
+	}
+	ldr.fb_width = w;
+	ldr.fb_height = h;
+	return 0;
+}
+
 static void close_disk(void)
 {
 	if (ldr.disk_file) {
@@ -201,6 +231,9 @@ static int __init ldr_init(void)
 	if (err)
 		return err;
 	ldr.ramdisk_path = ramdisk[0] ? ramdisk : NULL;
+	err = parse_fb();
+	if (err)
+		return err;
 	err = read_osk();
 	if (err)
 		return err;
@@ -211,6 +244,9 @@ static int __init ldr_init(void)
 	err = open_disk();
 	if (err)
 		return err;
+	/* not fatal: XNU still has its framebuffer, only Linux cannot look at it */
+	if (ldr.fb_size && bh_fb_publish(ldr.fb_pa, ldr.fb_size, ldr.fb_width, ldr.fb_height, ldr.fb_stride))
+		bh_log("xnu: could not publish /dev/beringia-fb");
 
 	/* CPU 0 enters vstart(boot_args) as pstart would: on low_eintstack, interrupts off */
 	st.cr3 = ldr.pml4_pa;
@@ -220,14 +256,17 @@ static int __init ldr_init(void)
 	st.rsi = 0;
 	bh_logf("xnu: entering vstart at %#llx (stack %#llx, CR3 %#llx)", st.rip, st.rsp, st.cr3);
 	err = bh_cpu_start(0, linux_cpu, &st, ldr_hostcall);
-	if (err)
+	if (err) {
+		bh_fb_unpublish();
 		close_disk();
+	}
 	return err;
 }
 
 static void __exit ldr_exit(void)
 {
 	bh_cpu_stop_all();
+	bh_fb_unpublish();
 	close_disk();
 	bh_log("xnu: unloaded");
 }

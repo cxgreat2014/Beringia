@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 obj-m += beringia_host.o
-beringia_host-y := main.o mem.o cpu.o selftest.o selftest_asm.o arch/x86_64/world.o arch/x86_64/world_asm.o
+beringia_host-y := main.o mem.o cpu.o fb.o selftest.o selftest_asm.o arch/x86_64/world.o arch/x86_64/world_asm.o
 ccflags-y += -I$(src)/include
 asflags-y += -I$(src)/include
 # Code that runs in the foreign world must not be rewritten into call-depth-tracking thunks (see world.S).

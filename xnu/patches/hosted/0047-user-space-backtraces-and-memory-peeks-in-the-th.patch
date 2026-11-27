@@ -1,0 +1,294 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weiyi Feng <fwy1998@gmail.com>
+Date: Sat, 28 Nov 2026 02:51:14 +0800
+Subject: [PATCH] hosted: user-space backtraces and memory peeks in the thread
+ dump
+
+The bring-up thread dump (beringia_xnu.ko dump=...) only showed kernel stacks,
+which for a user process blocked in a system call says little: WindowServer,
+loginwindow and Language Chooser all just sat in mach_msg, semwait or a
+semaphore. Beringia ABI 2 adds beringia_shared.dump_filter, set by the host
+before it requests a dump:
+
+- a process name (substring), or "*": for each matching thread also print the
+  saved user RIP/RSP and a frame-pointer walk of its user stack, plus the
+  task's main-image address and dyld shared cache slide, which is what an
+  offline symbolizer needs;
+- "peek:PID:ADDR:LEN": print LEN (<= 4096) bytes of that process's memory
+  instead, e.g. code of a protected binary, which is decrypted only in memory.
+
+User memory is read through the task's page tables with pmap_find_pa's walk
+but without its pmap lock: the dump runs in interrupt context on the only CPU
+and the interrupted thread may hold that lock. Pages that are not resident end
+the walk; nothing faults.
+---
+ EXTERNAL_HEADERS/beringia/abi.h |   7 +-
+ osfmk/x86_64/beringia.c         | 203 ++++++++++++++++++++++++++++++++
+ 2 files changed, 209 insertions(+), 1 deletion(-)
+
+diff --git a/EXTERNAL_HEADERS/beringia/abi.h b/EXTERNAL_HEADERS/beringia/abi.h
+index 71602a7..022a0f8 100644
+--- a/EXTERNAL_HEADERS/beringia/abi.h
++++ b/EXTERNAL_HEADERS/beringia/abi.h
+@@ -20,7 +20,7 @@
+ #ifndef BERINGIA_ABI_H
+ #define BERINGIA_ABI_H
+ 
+-#define BERINGIA_ABI_VERSION    1       /* block calls 34/35 are part of version 1 */
++#define BERINGIA_ABI_VERSION    2       /* 1: block calls 34/35; 2: beringia_shared.dump_filter */
+ #define BERINGIA_KERNEL_BASE    0xffffff8000000000ULL   /* x86_64 XNU KERNEL_BASE: image PA = VA - this */
+ #define BERINGIA_MAX_CPUS       64
+ 
+@@ -77,6 +77,11 @@ struct beringia_shared {
+ 	unsigned long long phys_top;        /* highest physical address (exclusive) of XNU's RAM: the physmap covers it */
+ 	/* per CPU */
+ 	struct beringia_cpu_shared cpu[BERINGIA_MAX_CPUS];
++	/* bring-up, set by the host before BERINGIA_PENDING_DUMP: the thread dump also prints the user-space state and
++	 * frame-pointer backtrace of threads whose process name contains this string ("*": every process; "" or "1":
++	 * kernel stacks only); "peek:PID:ADDR:LEN" prints LEN (<= 4096) bytes of that process's memory instead.
++	 * NUL-terminated. Appended last: the offsets above do not change. */
++	char dump_filter[32];
+ };
+ 
+ /* BERINGIA_CALL_CPU_START: where a secondary CPU enters XNU. */
+diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
+index 3e88322..2db21a2 100644
+--- a/osfmk/x86_64/beringia.c
++++ b/osfmk/x86_64/beringia.c
+@@ -33,8 +33,12 @@
+ #include <kern/thread.h>
+ #include <kern/queue.h>
+ #include <kern/misc_protos.h>
++#include <kern/task.h>
+ #include <i386/thread.h>
+ #include <i386/mp.h>
++#include <i386/pmap.h>
++#include <i386/pmap_internal.h>
++#include <i386/machine_routines.h>
+ 
+ /* Set by the loader before vstart runs; 0 means not hosted. */
+ uint64_t beringia_hook = 0;
+@@ -177,10 +181,195 @@ beringia_dump_line(const char *fmt, ...)
+ 	beringia_console_putc('\n');
+ }
+ 
++/* Does the host's dump filter (beringia_shared.dump_filter) select this process for user-space backtraces? */
++static bool
++beringia_dump_user_wanted(const char *procname)
++{
++	char f[sizeof(beringia_shared.dump_filter)];
++	size_t fl, pl, i;
++
++	memcpy(f, (const char *)beringia_shared.dump_filter, sizeof(f));
++	f[sizeof(f) - 1] = 0;
++	fl = strlen(f);
++	if (!fl || !strcmp(f, "1")) {
++		return false;
++	}
++	if (!strcmp(f, "*")) {
++		return true;
++	}
++	pl = procname ? strlen(procname) : 0;
++	for (i = 0; i + fl <= pl; i++) {
++		if (!memcmp(procname + i, f, fl)) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/*
++ * One aligned user word through the task's page tables: pmap_find_pa's walk without its pmap lock, which the
++ * interrupted thread may hold (one CPU, interrupt context; pmap_find_phys_nofault only serves the current pmap).
++ * No faults: a page that is not resident ends the walk.
++ */
++static bool
++beringia_dump_user_word(pmap_t pmap, uint64_t va, uint64_t *out)
++{
++	pd_entry_t *pdep, pde;
++	pt_entry_t *ptp, pte;
++	uint64_t pa;
++
++	if (!pmap || (va & 7) || va >= VM_MAX_USER_PAGE_ADDRESS) {
++		return false;
++	}
++	pdep = pmap_pde(pmap, va);
++	if (pdep == PD_ENTRY_NULL || !((pde = *pdep) & INTEL_PTE_VALID)) {
++		return false;
++	}
++	if (pde & PTE_PS) {
++		pa = pte_to_pa(pde) + (va & I386_LPGMASK);
++	} else {
++		ptp = pmap_pte(pmap, va);
++		if (ptp == PT_ENTRY_NULL || !((pte = *ptp) & INTEL_PTE_VALID)) {
++			return false;
++		}
++		pa = pte_to_pa(pte) + (va & PAGE_MASK);
++	}
++	*out = ml_phys_read_double_64(pa);
++	return true;
++}
++
++/*
++ * The user-space side of a thread that is in the kernel (a system call, a fault): its saved user registers and a
++ * frame-pointer walk of its user stack. Addresses are as mapped in that process: the main executable is at the
++ * "image" address, the dyld shared cache is slid by "cache_slide" (Beringia's docs/debugging.md).
++ */
++static void
++beringia_dump_user(thread_t th, task_t task, bool first_of_task)
++{
++	char bt[400];
++	int len, depth = 0;
++
++	if (first_of_task) {
++		beringia_dump_line("BERINGIA dump:   task image %#llx cache_slide %#x",
++		    (unsigned long long)task->mach_header_vm_address, task->task_shared_region_slide);
++	}
++	if (!th->machine.iss || !thread_is_64bit_addr(th)) {
++		return;
++	}
++	x86_saved_state64_t *uss = USER_REGS64(th);
++	pmap_t pmap = get_task_pmap(task);
++	uint64_t rbp = uss->rbp, prev = 0;
++
++	len = snprintf(bt, sizeof(bt), "  user rip %#llx rsp %#llx bt", (unsigned long long)uss->isf.rip,
++	    (unsigned long long)uss->isf.rsp);
++	while (depth++ < 24 && rbp > prev && len < (int)sizeof(bt) - 20) {
++		uint64_t next, ret;
++
++		if (!beringia_dump_user_word(pmap, rbp, &next) || !beringia_dump_user_word(pmap, rbp + 8, &ret)) {
++			break;
++		}
++		len += snprintf(bt + len, sizeof(bt) - len, " %#llx", (unsigned long long)ret);
++		prev = rbp;
++		rbp = next;
++	}
++	beringia_dump_line("BERINGIA dump: %s", bt);
++}
++
++/* A number at *p (decimal, or hexadecimal with 0x), advancing *p past it. */
++static uint64_t
++beringia_dump_number(const char **p)
++{
++	const char *s = *p;
++	uint64_t v = 0;
++	int base = 10;
++
++	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
++		base = 16;
++		s += 2;
++	}
++	for (;; s++) {
++		int d;
++
++		if (*s >= '0' && *s <= '9') {
++			d = *s - '0';
++		} else if (base == 16 && *s >= 'a' && *s <= 'f') {
++			d = *s - 'a' + 10;
++		} else if (base == 16 && *s >= 'A' && *s <= 'F') {
++			d = *s - 'A' + 10;
++		} else {
++			break;
++		}
++		v = v * base + d;
++	}
++	*p = s;
++	return v;
++}
++
++/*
++ * dump_filter "peek:PID:ADDR:LEN": print LEN (up to 4096) bytes of that process's memory at ADDR, 32 per line
++ * ("BERINGIA peek: ADDR HEX"), e.g. the code around a return address of a protected binary, which is only decrypted
++ * in memory. Unmapped pages print as "-".
++ */
++static void
++beringia_dump_peek(const char *spec)
++{
++	const char *p = spec;
++	uint64_t pid, addr, len, off;
++	thread_t th;
++	task_t task = TASK_NULL;
++
++	pid = beringia_dump_number(&p);
++	if (*p++ != ':') {
++		goto bad;
++	}
++	addr = beringia_dump_number(&p) & ~7ULL;
++	if (*p++ != ':') {
++		goto bad;
++	}
++	len = beringia_dump_number(&p);
++	if (*p || !len || len > 4096) {
++		goto bad;
++	}
++	queue_iterate(&threads, th, thread_t, threads) {
++		task_t t = get_threadtask(th);
++
++		if (t != kernel_task && (uint64_t)task_pid(t) == pid) {
++			task = t;
++			break;
++		}
++	}
++	if (task == TASK_NULL) {
++		beringia_dump_line("BERINGIA peek: no process %llu", (unsigned long long)pid);
++		return;
++	}
++	beringia_dump_line("BERINGIA peek: pid %llu '%s' %#llx +%#llx", (unsigned long long)pid, task_best_name(task),
++	    (unsigned long long)addr, (unsigned long long)len);
++	for (off = 0; off < len; off += 32) {
++		char line[160];
++		int l = snprintf(line, sizeof(line), "BERINGIA peek: %#llx", (unsigned long long)(addr + off));
++
++		for (int w = 0; w < 4; w++) {
++			uint64_t v;
++
++			if (beringia_dump_user_word(get_task_pmap(task), addr + off + 8 * w, &v)) {
++				l += snprintf(line + l, sizeof(line) - l, " %016llx", (unsigned long long)v);
++			} else {
++				l += snprintf(line + l, sizeof(line) - l, " -");
++			}
++		}
++		beringia_dump_line("%s", line);
++	}
++	beringia_dump_line("BERINGIA peek: end");
++	return;
++bad:
++	beringia_dump_line("BERINGIA peek: want peek:PID:ADDR:LEN (LEN 1..4096), not '%s'", spec);
++}
++
+ void
+ beringia_dump_threads(void)
+ {
+ 	thread_t th;
++	task_t last_task = TASK_NULL;
+ 	int n = 0;
+ 
+ 	/*
+@@ -191,6 +380,16 @@ beringia_dump_threads(void)
+ 		beringia_dump_line("BERINGIA dump: refused: %u CPUs (the thread walk is lock-free, one CPU only)", real_ncpus);
+ 		return;
+ 	}
++	{
++		char f[sizeof(beringia_shared.dump_filter)];
++
++		memcpy(f, (const char *)beringia_shared.dump_filter, sizeof(f));
++		f[sizeof(f) - 1] = 0;
++		if (!strncmp(f, "peek:", 5)) {
++			beringia_dump_peek(f + 5);
++			return;
++		}
++	}
+ 	beringia_dump_line("BERINGIA dump: %d threads (current %p)", threads_count, current_thread());
+ 	queue_iterate(&threads, th, thread_t, threads) {
+ 		char name[MAXTHREADNAMESIZE] = "";
+@@ -207,6 +406,10 @@ beringia_dump_threads(void)
+ 		beringia_dump_line("BERINGIA dump: pid %d proc '%s' thread %p tid %llu '%s' state %#x pri %d hint %d event %#llx cont %p",
+ 		    task_pid(task), procname, th, (unsigned long long)th->thread_id, name, th->state, th->sched_pri, (int)th->block_hint,
+ 		    (unsigned long long)th->wait_event, th->continuation);
++		if (task != kernel_task && beringia_dump_user_wanted(procname)) {
++			beringia_dump_user(th, task, task != last_task);
++			last_task = task;
++		}
+ 		if (th == current_thread() || th->kernel_stack == 0) {
+ 			continue;
+ 		}

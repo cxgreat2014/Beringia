@@ -97,4 +97,12 @@ void bh_file_close(void *f);
 void bh_random(void *buf, unsigned long len);
 void bh_wallclock(bh_u64 *sec, bh_u64 *nsec);
 
+/* ---- a framebuffer for Linux user space ---- */
+
+/* Publish [pa, pa + size) of a carve-out, which the foreign kernel uses as its framebuffer (XRGB8888, width x height,
+ * stride bytes per row), as /dev/beringia-fb: pread(2) the pixels; the geometry is in the device's sysfs attribute
+ * "geometry". One at a time. Unpublish before the foreign kernel stops using the memory for it. May sleep. */
+int bh_fb_publish(bh_u64 pa, bh_u64 size, unsigned int width, unsigned int height, unsigned int stride);
+void bh_fb_unpublish(void);
+
 #endif /* BERINGIA_HOST_H */

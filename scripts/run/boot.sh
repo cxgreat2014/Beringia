@@ -16,6 +16,8 @@
 #                                  wedged CPU leaves a backtrace in the host-side console log instead of a silent hang
 #   BERINGIA_TRACE=PATH            the host module's trace file (default: the run directory's trace.txt)
 #   BERINGIA_OSK_FILE=PATH         the DSMOS key from your own Mac, for BeringiaSMC (docs/setup/macos-assets.md)
+#   BERINGIA_FB=WIDTHxHEIGHT       the boot framebuffer (default: the loader's, 1280x800; empty for none), shown by
+#                                  tools/debug/fbshot.py through /dev/beringia-fb
 set -euo pipefail
 . "$(dirname "$0")/../lib/env.sh"
 [ "$(id -u)" = 0 ] || die "run as root (wsl -u root)"
@@ -49,6 +51,8 @@ if [ -n "${BERINGIA_OSK_FILE:-}" ]; then
 	[ -f "$BERINGIA_OSK_FILE" ] || die "no DSMOS key file at $BERINGIA_OSK_FILE"
 	osk_param="osk=$BERINGIA_OSK_FILE"
 fi
+fb_param=
+[ -z "${BERINGIA_FB+set}" ] || fb_param="fb=$BERINGIA_FB"
 
 # The per-run directory on the Windows side: never reused, so one run's evidence is not overwritten by the next.
 run_id=$(date +%Y%m%d-%H%M%S)
@@ -72,6 +76,7 @@ if [ -n "${BERINGIA_WIN_DIR:-}" ]; then
 		echo "ramdisk=${BERINGIA_RAMDISK:-<none>}"
 		echo "disk=${BERINGIA_DISK:-<none>}"
 		echo "dsmos_key=$([ -n "$osk_param" ] && echo supplied || echo none)"
+		echo "fb=${BERINGIA_FB-<loader default>}"
 		echo "linux_cpu=${BERINGIA_LINUX_CPU:-1}"
 	} > "$run_dir/meta.txt"
 else
@@ -134,7 +139,7 @@ trap load_failed EXIT
 insmod "$BERINGIA_ROOT/host/beringia_host.ko" carve="$BERINGIA_CARVE" ${BERINGIA_TRACE:+trace="$BERINGIA_TRACE"}
 # Module parameters are split at spaces unless the value is in double quotes, which must reach the kernel literally.
 insmod "$BERINGIA_ROOT/loader/beringia_xnu.ko" linux_cpu="${BERINGIA_LINUX_CPU:-1}" ${ramdisk_param:+"$ramdisk_param"} ${disk_param:+"$disk_param"} ${osk_param:+"$osk_param"} \
-	${BERINGIA_BOOT_ARGS:+"boot_args=\"$BERINGIA_BOOT_ARGS\""}
+	${fb_param:+"$fb_param"} ${BERINGIA_BOOT_ARGS:+"boot_args=\"$BERINGIA_BOOT_ARGS\""}
 trap - EXIT
 sleep "$secs"
 dmesg | grep -E "beringia|BUG:|Oops:|RIP:|WARNING:|rcu:|watchdog:" | tail -200
