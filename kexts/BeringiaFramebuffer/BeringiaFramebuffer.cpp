@@ -63,10 +63,17 @@ class BeringiaFramebuffer : public IOFramebuffer
 	IONotifier *fDisplayNotifier;
 	IOTimerEventSource *fConnectTimer;
 	thread_call_t fOpenCall;
+	bool fStopping;
 
 	UInt64 pixelClock(void) const
 	{
 		return (UInt64)(fWidth + kHBlank) * (fHeight + fVBlank) * kRefreshHz;
+	}
+	/* EDID's detailed timing has 12-bit active fields and a 16-bit 10 kHz pixel clock: a larger mode cannot be
+	 * described (4096 would wrap to 0), so start() refuses it rather than publish a mode that is not the memory. */
+	bool edidFits(void) const
+	{
+		return fWidth <= 4095 && fHeight <= 4095 && pixelClock() / 10000 <= 0xffff;
 	}
 	void buildEDID(void);
 	static bool displayAppeared(void *target, void *refCon, IOService *display, IONotifier *notifier);
@@ -169,12 +176,12 @@ BeringiaFramebuffer::buildEDID(void)
 	for (i = 0; i < 13; i++) {
 		d[5 + i] = i < sizeof(name) - 1 ? (UInt8)name[i] : (i == sizeof(name) - 1 ? 0x0a : 0x20);
 	}
-	d = e + 90;                             /* range limits: 56-61 Hz vertical, 30-120 kHz horizontal */
+	d = e + 90;                             /* range limits, around this mode: no display may be told they exclude it */
 	d[3] = 0xfd;
-	d[5] = 56;
-	d[6] = 61;
-	d[7] = 30;
-	d[8] = 120;
+	d[5] = 50;                              /* minimum vertical, Hz */
+	d[6] = kRefreshHz + 10;
+	d[7] = 30;                              /* minimum horizontal, kHz */
+	d[8] = (UInt8)min(255u, (unsigned)(((UInt64)(fWidth + kHBlank) * (kRefreshHz + 10) + 999) / 1000));
 	d[9] = (UInt8)((clk / 1000 + 1) & 0xff); /* max pixel clock, 10 MHz units */
 	d[10] = 0x00;
 	d[11] = 0x0a;
@@ -222,6 +229,11 @@ BeringiaFramebuffer::start(IOService *provider)
 	if (!fVRAM) {
 		return false;
 	}
+	if (!edidFits()) {
+		IOLog("BeringiaFramebuffer: %ux%u at %llu Hz has no EDID detailed timing (12-bit sizes, 16-bit clock)\n",
+		    fWidth, fHeight, (unsigned long long)pixelClock());
+		return false;
+	}
 	buildEDID();
 	IOLog("BeringiaFramebuffer: %ux%u, %u bytes per row, at %#llx; %u lines of vertical blanking, %llu Hz pixel clock\n",
 	    fWidth, fHeight, fStride, (unsigned long long)fVRAM->getPhysicalAddress(), fVBlank,
@@ -251,8 +263,13 @@ void
 BeringiaFramebuffer::earlyOpen(thread_call_param_t param, thread_call_param_t unused)
 {
 	BeringiaFramebuffer *self = (BeringiaFramebuffer *)param;
-	IOReturn r = self->open();
+	IOReturn r;
 
+	if (self->fStopping) {
+		self->release();        /* stopped: do not open a dead framebuffer */
+		return;
+	}
+	r = self->open();
 	IOLog("BeringiaFramebuffer: opened at boot: %#x\n", r);
 	self->release();
 }
@@ -260,6 +277,10 @@ BeringiaFramebuffer::earlyOpen(thread_call_param_t param, thread_call_param_t un
 void
 BeringiaFramebuffer::stop(IOService *provider)
 {
+	fStopping = true;
+	if (fOpenCall) {
+		thread_call_cancel(fOpenCall);  /* pending? cancel; already running: earlyOpen sees fStopping */
+	}
 	if (fDisplayNotifier) {
 		fDisplayNotifier->remove();
 		fDisplayNotifier = NULL;

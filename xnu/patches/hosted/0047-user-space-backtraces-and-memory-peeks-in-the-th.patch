@@ -22,12 +22,12 @@ but without its pmap lock: the dump runs in interrupt context on the only CPU
 and the interrupted thread may hold that lock. Pages that are not resident end
 the walk; nothing faults.
 ---
- EXTERNAL_HEADERS/beringia/abi.h |   7 +-
- osfmk/x86_64/beringia.c         | 203 ++++++++++++++++++++++++++++++++
- 2 files changed, 209 insertions(+), 1 deletion(-)
+ EXTERNAL_HEADERS/beringia/abi.h |  10 +-
+ osfmk/x86_64/beringia.c         | 208 ++++++++++++++++++++++++++++++++
+ 2 files changed, 217 insertions(+), 1 deletion(-)
 
 diff --git a/EXTERNAL_HEADERS/beringia/abi.h b/EXTERNAL_HEADERS/beringia/abi.h
-index 71602a7..022a0f8 100644
+index 71602a7..47e604e 100644
 --- a/EXTERNAL_HEADERS/beringia/abi.h
 +++ b/EXTERNAL_HEADERS/beringia/abi.h
 @@ -20,7 +20,7 @@
@@ -35,11 +35,11 @@ index 71602a7..022a0f8 100644
  #define BERINGIA_ABI_H
  
 -#define BERINGIA_ABI_VERSION    1       /* block calls 34/35 are part of version 1 */
-+#define BERINGIA_ABI_VERSION    2       /* 1: block calls 34/35; 2: beringia_shared.dump_filter */
++#define BERINGIA_ABI_VERSION    3       /* 1: block calls 34/35; 2: beringia_shared.dump_filter; 3: kernel_abi */
  #define BERINGIA_KERNEL_BASE    0xffffff8000000000ULL   /* x86_64 XNU KERNEL_BASE: image PA = VA - this */
  #define BERINGIA_MAX_CPUS       64
  
-@@ -77,6 +77,11 @@ struct beringia_shared {
+@@ -77,6 +77,14 @@ struct beringia_shared {
  	unsigned long long phys_top;        /* highest physical address (exclusive) of XNU's RAM: the physmap covers it */
  	/* per CPU */
  	struct beringia_cpu_shared cpu[BERINGIA_MAX_CPUS];
@@ -48,11 +48,14 @@ index 71602a7..022a0f8 100644
 +	 * kernel stacks only); "peek:PID:ADDR:LEN" prints LEN (<= 4096) bytes of that process's memory instead.
 +	 * NUL-terminated. Appended last: the offsets above do not change. */
 +	char dump_filter[32];
++	/* written by XNU (BERINGIA_ABI_VERSION of the header it was built with) the first time it calls the host, so the
++	 * loader can tell a kernel without dump_filter (0) from its own; it is 0 for a kernel built before this field. */
++	unsigned int kernel_abi;
  };
  
  /* BERINGIA_CALL_CPU_START: where a secondary CPU enters XNU. */
 diff --git a/osfmk/x86_64/beringia.c b/osfmk/x86_64/beringia.c
-index 3e88322..2db21a2 100644
+index 3e88322..4f4084a 100644
 --- a/osfmk/x86_64/beringia.c
 +++ b/osfmk/x86_64/beringia.c
 @@ -33,8 +33,12 @@
@@ -68,7 +71,19 @@ index 3e88322..2db21a2 100644
  
  /* Set by the loader before vstart runs; 0 means not hosted. */
  uint64_t beringia_hook = 0;
-@@ -177,10 +181,195 @@ beringia_dump_line(const char *fmt, ...)
+@@ -48,6 +52,11 @@ beringia_call(unsigned long nr, unsigned long a1, unsigned long a2)
+ {
+ 	long r;
+ 
++	/* let the loader see which header this kernel was built with before it uses beringia_shared fields */
++	if (beringia_shared.kernel_abi != BERINGIA_ABI_VERSION) {
++		beringia_shared.kernel_abi = BERINGIA_ABI_VERSION;
++	}
++
+ 	/* SysV call: the host preserves rbx, rbp, r12-r15, the FPU state and the interrupt flag */
+ 	__asm__ volatile ("call *%[hook]"
+             : "=a"(r), "+D"(nr), "+S"(a1), "+d"(a2)
+@@ -177,10 +186,195 @@ beringia_dump_line(const char *fmt, ...)
  	beringia_console_putc('\n');
  }
  
@@ -141,8 +156,8 @@ index 3e88322..2db21a2 100644
 +	int len, depth = 0;
 +
 +	if (first_of_task) {
-+		beringia_dump_line("BERINGIA dump:   task image %#llx cache_slide %#x",
-+		    (unsigned long long)task->mach_header_vm_address, task->task_shared_region_slide);
++		beringia_dump_line("BERINGIA dump:   task image 0x%llx cache_slide 0x%x",
++		    (unsigned long long)task->mach_header_vm_address, (unsigned int)task->task_shared_region_slide);
 +	}
 +	if (!th->machine.iss || !thread_is_64bit_addr(th)) {
 +		return;
@@ -264,7 +279,7 @@ index 3e88322..2db21a2 100644
  	int n = 0;
  
  	/*
-@@ -191,6 +380,16 @@ beringia_dump_threads(void)
+@@ -191,6 +385,16 @@ beringia_dump_threads(void)
  		beringia_dump_line("BERINGIA dump: refused: %u CPUs (the thread walk is lock-free, one CPU only)", real_ncpus);
  		return;
  	}
@@ -281,7 +296,7 @@ index 3e88322..2db21a2 100644
  	beringia_dump_line("BERINGIA dump: %d threads (current %p)", threads_count, current_thread());
  	queue_iterate(&threads, th, thread_t, threads) {
  		char name[MAXTHREADNAMESIZE] = "";
-@@ -207,6 +406,10 @@ beringia_dump_threads(void)
+@@ -207,6 +411,10 @@ beringia_dump_threads(void)
  		beringia_dump_line("BERINGIA dump: pid %d proc '%s' thread %p tid %llu '%s' state %#x pri %d hint %d event %#llx cont %p",
  		    task_pid(task), procname, th, (unsigned long long)th->thread_id, name, th->state, th->sched_pri, (int)th->block_hint,
  		    (unsigned long long)th->wait_event, th->continuation);

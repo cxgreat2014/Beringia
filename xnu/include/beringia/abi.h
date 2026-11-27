@@ -20,7 +20,7 @@
 #ifndef BERINGIA_ABI_H
 #define BERINGIA_ABI_H
 
-#define BERINGIA_ABI_VERSION    2       /* 1: block calls 34/35; 2: beringia_shared.dump_filter */
+#define BERINGIA_ABI_VERSION    3       /* 1: block calls 34/35; 2: beringia_shared.dump_filter; 3: kernel_abi */
 #define BERINGIA_KERNEL_BASE    0xffffff8000000000ULL   /* x86_64 XNU KERNEL_BASE: image PA = VA - this */
 #define BERINGIA_MAX_CPUS       64
 
@@ -82,6 +82,9 @@ struct beringia_shared {
 	 * kernel stacks only); "peek:PID:ADDR:LEN" prints LEN (<= 4096) bytes of that process's memory instead.
 	 * NUL-terminated. Appended last: the offsets above do not change. */
 	char dump_filter[32];
+	/* written by XNU (BERINGIA_ABI_VERSION of the header it was built with) the first time it calls the host, so the
+	 * loader can tell a kernel without dump_filter (0) from its own; it is 0 for a kernel built before this field. */
+	unsigned int kernel_abi;
 };
 
 /* BERINGIA_CALL_CPU_START: where a secondary CPU enters XNU. */

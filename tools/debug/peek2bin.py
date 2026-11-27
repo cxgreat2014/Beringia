@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 # Turn "BERINGIA peek:" lines (beringia_xnu.ko dump=peek:PID:ADDR:LEN) into a binary file and print its base address,
-# e.g. to disassemble code that is only decrypted in memory:
+# e.g. to disassemble a process's mapped memory at the addresses it runs at. Blocks need not be contiguous; a gap is
+# filled with 0xcc:
 #
 #   dmesg | tools/debug/peek2bin.py out.bin
 #   objdump -D -b binary -m i386:x86-64 --adjust-vma=BASE out.bin
@@ -21,8 +22,11 @@ for line in sys.stdin:
     addr = int(m.group(1), 16)
     if base is None:
         base = addr
+    if addr < base + len(data):
+        sys.exit("block at %#x overlaps the previous one" % addr)
     if addr != base + len(data):
-        sys.exit("gap at %#x" % addr)
+        print("gap %#x-%#x filled with 0xcc" % (base + len(data), addr), file=sys.stderr)
+        data += b"\xcc" * (addr - base - len(data))
     for w in m.group(2).split():
         data += b"\xcc" * 8 if w == "-" else struct.pack("<Q", int(w, 16))
 if base is None:

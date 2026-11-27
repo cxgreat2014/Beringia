@@ -151,7 +151,12 @@ def cmd_check(a):
                 if not os.path.isdir(os.path.dirname(dst)):
                     unfixable.append(p)
                     continue
-                os.link(os.path.join(root, have[0]), dst)
+                try:
+                    os.link(os.path.join(root, have[0]), dst)
+                except OSError as e:            # e.g. the name already exists: record it, do not stop the run
+                    print("cannot link %s from %s: %s" % (p, have[0], e.strerror), file=sys.stderr)
+                    unfixable.append(p)
+                    continue
                 fixed.append((p, have[0]))
     print("mtree entries: %d (%d hard-link groups, %d names)" % (len(entries), len(groups),
                                                                sum(len(p) for p in groups.values())))

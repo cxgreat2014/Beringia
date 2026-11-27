@@ -52,6 +52,12 @@ static int dump_set(const char *val, const struct kernel_param *kp)
 
 	if (!ldr.shared)
 		return -ENODEV;
+	/* the kernel writes its header version on its first host call; without it, the struct ends before dump_filter */
+	if (ldr.shared->kernel_abi != BERINGIA_ABI_VERSION) {
+		bh_logf("xnu: the kernel was built with beringia ABI %u, this loader has %u: no dump",
+		    ldr.shared->kernel_abi, BERINGIA_ABI_VERSION);
+		return -EINVAL;
+	}
 	n = strcspn(val, "\n");
 	if (n >= sizeof(ldr.shared->dump_filter))
 		return -EINVAL;
@@ -66,7 +72,7 @@ static int dump_set(const char *val, const struct kernel_param *kp)
 
 static const struct kernel_param_ops dump_ops = { .set = dump_set };
 module_param_cb(dump, &dump_ops, NULL, 0200);
-MODULE_PARM_DESC(dump, "write anything: the hosted XNU prints every thread's state and backtrace");
+MODULE_PARM_DESC(dump, "process-name substring, \"*\", or peek:PID:ADDR:LEN: the hosted XNU prints threads and user stacks");
 
 static int find_low_range(void)
 {
