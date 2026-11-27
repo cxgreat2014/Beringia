@@ -68,6 +68,7 @@ class BeringiaFramebuffer : public IOFramebuffer
 	bool fStopping;
 	bool fHosted;              /* this instance is the PCI-hosted framebuffer, not the device-tree node */
 	BeringiaPCIDevice *fPCI;   /* the virtual PCI device it sits on */
+	BeringiaPCIBridge *fPCIBridge;  /* and the bridge the device hangs from (GPUWrangler dereferences it) */
 
 	bool startHosted(IOService *deviceNode);
 
@@ -212,12 +213,22 @@ bool
 BeringiaFramebuffer::startHosted(IOService *node)
 {
 	BeringiaFramebuffer *fb;
-	bool ok;
 
-	/* The virtual PCI device is an experiment until it carries a real IOPCIBridge (GPUWrangler reads the bridge at
-	 * its +0x78, run 20261128-062407): boot with beringia_pci=1 to try it; by default the driver stays on the node. */
+	/* The virtual PCI device is an experiment until the display stack accepts it: boot with beringia_pci=1 to try
+	 * it; by default the driver stays on the device-tree node. */
 	uint32_t pci = 0;
 	if (!PE_parse_boot_argn("beringia_pci", &pci, sizeof(pci)) || !pci) {
+		return false;
+	}
+	/*
+	 * The device must be an ordinary IOPCIDevice with an IOPCIBridge provider: GPUWrangler stores
+	 * safeMetaCast(device->getProvider(), IOPCIBridge) and dereferences it, and IOPCIDevice's configAccess
+	 * dereferences the bridge's ExpansionData. Neither the bridge nor the device is registered or probed: the
+	 * bridge enumerates nothing, and the device is created here and published once.
+	 */
+	fPCIBridge = new BeringiaPCIBridge;
+	if (!fPCIBridge || !fPCIBridge->init(NULL) || !fPCIBridge->IOService::attach(node)) {
+		IOLog("BeringiaFramebuffer: no PCI bridge under %s\n", node->getName());
 		return false;
 	}
 	fPCI = new BeringiaPCIDevice;
@@ -225,17 +236,15 @@ BeringiaFramebuffer::startHosted(IOService *node)
 		IOLog("BeringiaFramebuffer: no virtual PCI device\n");
 		return false;
 	}
-	/* IOService::attach, not IOPCIDevice::attach: that one expects the provider to be an IOPCIBridge and faults on
-	 * a platform node (run 20261128-062114) */
-	if (!fPCI->IOService::attach(node)) {
-		IOLog("BeringiaFramebuffer: could not attach the PCI device to %s\n", node->getName());
-		return false;
-	}
-	if (!fPCI->start(node)) {
+	fPCI->setPCIBridge(fPCIBridge);
+	fPCI->space.bits = 0;           /* bus 0, device 0, function 0 */
+	if (!fPCI->IOService::attach(fPCIBridge) || !fPCI->start(fPCIBridge)) {
 		IOLog("BeringiaFramebuffer: the PCI device did not start\n");
 		return false;
 	}
-	fPCI->registerService();
+	IOLog("BeringiaFramebuffer: PCI %04x:%04x config %08x class %08x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE,
+	    fPCI->extendedConfigRead32(0), fPCI->extendedConfigRead32(8));
+	fPCI->registerService(0);
 	fb = new BeringiaFramebuffer;
 	if (!fb || !fb->init(NULL)) {
 		return false;
@@ -247,9 +256,8 @@ BeringiaFramebuffer::startHosted(IOService *node)
 		return false;
 	}
 	fb->registerService();
-	ok = true;
 	IOLog("BeringiaFramebuffer: hosted under virtual PCI %04x:%04x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE);
-	return ok;
+	return true;
 }
 
 bool
@@ -375,6 +383,8 @@ BeringiaFramebuffer::free(void)
 		fOpenCall = NULL;
 	}
 	OSSafeReleaseNULL(fVRAM);
+	OSSafeReleaseNULL(fPCI);        /* the device first: its provider is the bridge */
+	OSSafeReleaseNULL(fPCIBridge);
 	IOFramebuffer::free();
 }
 
