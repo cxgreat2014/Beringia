@@ -6,16 +6,25 @@ directory (`$BERINGIA_WIN_DIR/runs/<id>/`, see [debugging.md](debugging.md)) tha
 [architecture.md](architecture.md); for milestones, [../ROADMAP.md](../ROADMAP.md). The detailed M5 experiment log is
 [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
 
-## Where XNU gets to today (2026-11-27, after the audit)
+## Where XNU gets to today (2026-11-28)
 
-**The full macOS 26 system boots past launchd's early boot and runs ~130 Apple daemons from a 40 GiB APFS system
-image on BeringiaDisk**, the IOKit registry goes quiet, and WindowServer is launched (runs `20261127-153054`,
-`20261127-161735`), with no kernel panic and no host warning. There is still no display, no input, no shell and no
-GUI.
+**WindowServer runs and draws on a framebuffer, and the first-boot Language Chooser app runs**: the full macOS 26
+system boots from a 40 GiB APFS image on BeringiaDisk, WindowServer finishes initializing and sits in its server loop,
+the screen (seen through `/dev/beringia-fb`) shows WindowServer's black desktop and the arrow cursor, and Language
+Chooser is idle in `-[NSApplication run]` (run `20261128-023734`). Its window does not reach the screen yet, and
+there is no input. How each blocker on the way was found and fixed:
+[research/m5-userspace-bringup.md, section 7](research/m5-userspace-bringup.md).
 
-- The legacy prelinked kernel links **39 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
-  (security, storage, APFS, AppleSMC, DSMOS, IOSerialFamily/IOUserSerial) plus `BeringiaDisk` and `BeringiaSMC`;
-  the recipe is in [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
+- The legacy prelinked kernel links **48 kexts**: [scripts/kc/full-system.kexts](../scripts/kc/full-system.kexts)
+  (security, storage, APFS, AppleSMC, DSMOS, serial, HID, graphics, GPU wrangler, IOSurface, LiveFS) plus
+  `BeringiaDisk` and `BeringiaSMC`; the recipe is in [research/m5-userspace-bringup.md](research/m5-userspace-bringup.md).
+- The display is the loader's boot framebuffer (`fb=WxH`, default 1280x800), driven by IONDRVSupport's
+  `IONDRVFramebuffer`/`IOBootNDRV` through the device-tree node `/display`. No GPU, no Metal device.
+- The image had lost **23 427 hard-linked file names** in extraction (powerd's launchd plist among them, so powerd
+  never ran); `tools/disk/mtree.py` restored them from the OTA's mtree. bluetoothd is disabled in the image for now:
+  with no Bluetooth controller it never answers, and its clients (Language Chooser) waited forever.
+
+The state as of the audit (2026-11-27), kept for the record:
 - The system image (`$BERINGIA_ASSETS/system.apfs.img`) is a **single APFS volume** with the 25A353 OTA system tree
   and its OS-cryptex runtime (dyld shared cache, libSystem). It was assembled by hand during M5 with apfsprogs
   `mkapfs` and the experimental linux-apfs-rw write support; **no script in this repository rebuilds it yet**, and
@@ -36,14 +45,13 @@ GUI.
     as soon as softwareupdated read the registry: hosted patch 0045.
   - **WindowServer waited forever in `IOKitWaitQuiet()`**: a serial dext matching `IOUserResources` needed
     `IOUserSerial`, which kernelmanagerd cannot load for a legacy prelinked kernel; it is in the KC now.
-- **WindowServer now exits with `exit(1)` 86 ms after each launch** and launchd respawns it every 10 s. There is no
-  display device (no framebuffer, no input), the expected reason; its unified log would confirm it but needs a
-  tracev3 reader.
+- **WindowServer exited with `exit(1)` 86 ms after each launch** (fixed 2026-11-28: its unified log said `IOHIDSystem
+  not found`).
 - **The image lacks most of the OS cryptex**: only 19 runtime files (dyld caches, libSystem, ...) of its 2757 file
-  forks were staged. `pkd` crash-loops on `PlugInKitDaemon.framework` (not on disk, not in the dyld cache), and
-  `coreduetd` (PeopleSuggester resource) probably on the same gap. The App cryptex is not staged either.
-- Other crash loops: `timed` (an assertion, not analysed); `fskitd` is throttled after exit; `data-protection`
-  (`seputil`, arm64e only) fails with `Bad CPU type`, which is expected on Intel.
+  forks were staged. `pkd` crash-loops on `PlugInKitDaemon.framework` (not on disk, not in the dyld cache). The App
+  cryptex is not staged either. (`coreduetd`'s PeopleSuggester resource was a lost hard link; fixed.)
+- Other crash loops: `timed` (fixed: it was powerd); `fskitd` (fixed: lifs.kext); `data-protection` (`seputil`,
+  arm64e only) fails with `Bad CPU type`, which is expected on Intel.
 - A self-written unsigned `/sbin/launchd` is rejected by AMFI ("The system only allows platform binaries").
 
 ## Important fixes in this round
@@ -83,7 +91,8 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
   corrupting it.
 - **Self-test** covers sleeping inside a host call (`selftest_sleep`) and the safety net (`selftest_tamper`).
 - **Thread dump** (`echo 1 > /sys/module/beringia_xnu/parameters/dump`), `tools/debug/symbolize.py`, and fatal
-  userspace exception logging (hosted patch 0036).
+  userspace exception logging (hosted patch 0036); since patch 0047 also user stacks (`dump=NAME`, named with
+  `tools/debug/dyldsym.py`) and user-memory peeks. macOS's own logs: `tools/debug/harvest.sh`.
 - **Run directories, host-side console log and the watchdog**: [debugging.md](debugging.md).
 - **Host isolation tests**: `tests/host/` memcheck/fpcheck pass on a quiet host and detect deliberate corruption.
 
@@ -91,9 +100,9 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 
 | Area | State |
 |---|---|
-| Userland | The full system's launchd and ~130 daemons run. No interactive shell, console login or GUI; WindowServer waits in `IOKitWaitQuiet()`. |
+| Userland | The full system's launchd and ~200 processes run, WindowServer and Language Chooser among them. No interactive shell, no input, no login yet. bluetoothd is disabled in the image (no controller). |
 | System image | One APFS volume (role 0), not the System/Data/Preboot/VM container macOS expects; hand-built, not reproducible from this repository yet; no `SF_RESTRICTED` flags (hence `CSR_ALLOW_UNRESTRICTED_FS`). DroidVM found single-volume and union layouts a source of daemon crash loops and moved to a real multi-volume container. |
-| kexts | A legacy prelinked kernel (39 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only, with the DSMOS key the user supplies (`BERINGIA_OSK_FILE`). |
+| kexts | A legacy prelinked kernel (48 kexts). kernelmanagerd cannot load the on-disk `SystemKernelExtensions.kc` (expected with a legacy prelinked kernel). BeringiaPlatform is linked into the kernel; a standalone BeringiaCPU kext is not done. BeringiaSMC serves DSMOS only, with the DSMOS key the user supplies (`BERINGIA_OSK_FILE`). |
 | trust caches | `trust_cache_init` succeeds with the img4 interface; no full-system static trust cache is supplied by the loader yet. Patch 0029 remains as the no-image4 fallback. |
 | kalloc_type | Degraded to size-based data zones (upstream LLVM has no `__builtin_xnu_type_summary`). Kext views use the external fallback in the static format; no hang has been observed. |
 | Block I/O | BeringiaDisk mounts APFS read-write. It reports a volatile write cache and a flush is an `fsync` of the image on the host; force-unit-access writes are not honoured individually. The read-only fallback is not validated. |
@@ -101,19 +110,21 @@ The detailed boot arguments and reproduction commands are in [research/m5-usersp
 | NMI / #MC | **Not forwarded yet**: in the foreign world they enter XNU's own handlers. |
 | NVRAM | IODTNVRAM is a stub; IONVRAM is announced as ready. NVRAM writes from ramrod report unsupported function. |
 | SMP | One hosted CPU. The pending word is atomic on both sides already. The block host call reads its request once, and the thread dump refuses to run with more than one CPU (its walk takes no lock). |
-| Display / input | None. WindowServer has no framebuffer. Note for that work: XNU runs under Linux's PAT, so its WT mappings (PA1) are write-combining and its WC mappings (PA6) are UC- (hosted patch 0025 leaves the host PAT alone). |
+| Display / input | A boot framebuffer (loader `fb=`), `IONDRVFramebuffer`, screenshots through `/dev/beringia-fb`; no GPU, no Metal, a single fixed mode. No input device yet. XNU runs under Linux's PAT, so its WT mappings (PA1) are write-combining and its WC mappings (PA6), the framebuffer's, are UC- (hosted patch 0025 leaves the host PAT alone): correct, but drawing is slower than on real hardware. |
 | Linux latency | While XNU runs with interrupts off, that Linux CPU takes no interrupts. Measure before SMP. |
 
 ## Next steps, in order
 
-1. Make the system image reproducible from this repository (`tools/disk/`): rebuild the **whole** OS cryptex volume
-   (RIDIFF forks + its APFS template) and merge it, as DroidVM does; then a real APFS container (System, Data,
-   Preboot, VM) with `SF_RESTRICTED` on the system files, so the Preboot hack and `CSR_ALLOW_UNRESTRICTED_FS` can go.
-   Keep a pristine copy and boot from a working copy.
-2. A unified-log (tracev3) reader on Linux, to read WindowServer's and other daemons' own logs from the image.
-3. A framebuffer (`BeringiaFramebuffer`: an IOFramebuffer with a linear framebuffer in the carve-out and a host
-   viewer; mind the PAT note above) and input, so WindowServer finds a display; console input and a shell in
-   parallel. Keep NMI/#MC forwarding, SMP and `tools/kc` CI tests as separate hardening work.
+1. Get Language Chooser's window (and then loginwindow's) onto the screen: find out whether it is never ordered in or
+   WindowServer does not composite it without a Metal device.
+2. Input: a keyboard and an absolute pointer the HID system accepts, fed from a viewer on the Windows side; a live
+   viewer instead of screenshots.
+3. Make the system image reproducible from this repository (`tools/disk/`): the hard-link repair and the launchd
+   overrides as build steps; the **whole** OS cryptex volume (RIDIFF forks + its APFS template); a real APFS container
+   (System, Data, Preboot, VM) with `SF_RESTRICTED`, so the Preboot hack and `CSR_ALLOW_UNRESTRICTED_FS` can go. Boot
+   from a fresh working copy of a pristine image, so each run's logs are its own.
+4. Skip Setup Assistant with a local account, then launch apps. Keep NMI/#MC forwarding, SMP and `tools/kc` CI tests
+   as separate hardening work.
 
 The 2026-11-27 audit of the M5 work, with every finding and what was done about it, is
 [audit/2026-11-27-m5-session-audit.md](audit/2026-11-27-m5-session-audit.md).

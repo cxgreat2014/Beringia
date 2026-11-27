@@ -12,11 +12,17 @@ screenshot), and nothing is marked done without it. Status legend: ✅ done · �
 | M4 | Platform & kernel collection | `BeringiaPlatform`/`BeringiaCPU` kexts; KC built on Linux from Beringia's kernel + 25A353 Apple kexts; IOKit reaches "waiting for root device" | 🔨 (boot path done: legacy prelinked kernel + security stack, 14-min clean root-device wait; standalone BeringiaCPU not done) |
 | M5 | First macOS 26 userspace | `BeringiaDisk` + 25A353 recovery ramdisk as root; `launchd` (PID 1) starts and runs a shell | 🔨 (the full system's launchd and ~130 daemons run from BeringiaDisk; no console input, so no shell yet) |
 | M6 | Full macOS 26 system | System volume built from the 25A353 OTA payload; multi-user boot; console login; network (`BeringiaNet`), `ssh` into macOS | ⬜ |
-| M7 | Display & input | Framebuffer + input kexts; WindowServer and loginwindow on the CPU renderer; screenshot from the host | ⬜ |
+| M7 | Display & input | Framebuffer + input kexts; WindowServer and loginwindow on the CPU renderer; screenshot from the host | 🔨 (boot framebuffer + IONDRVFramebuffer; WindowServer runs and draws its cursor, screenshots through `/dev/beringia-fb`; no app window on screen, no input yet) |
 | M8 | Productization | One `beringia` CLI (build, disk, boot, console); CI for modules + XNU; test suite; docs for non-WSL hosts | ⬜ |
 
 ## Now
 
+- 2026-11-28: WindowServer runs and draws. Its own unified log (now readable on Linux) said `IOHIDSystem not found`;
+  user-space backtraces in the thread dump then showed each next wait (GPU wrangler, IOSurface, Bluetooth, FSKit's
+  LiveFS) and the loader gained a boot framebuffer that IONDRVFramebuffer drives. The image had lost 23 427 hard-linked
+  names in extraction, powerd's launchd plist among them; `tools/disk/mtree.py` restores them from the OTA's mtree.
+  The first-boot Language Chooser now runs and waits for input, but its window is not on the screen yet
+  ([docs/research/m5-userspace-bringup.md](docs/research/m5-userspace-bringup.md), section 7).
 - 2026-11-27 (audit): the full 25A353 system boots from a 40 GiB APFS image on BeringiaDisk past launchd's early
   boot; kernelmanagerd checks in and ~130 Apple daemons run without a kernel panic. That took the CSR flag, the
   platform UUID from `/efi/platform/system-id`, BeringiaSMC for DSMOS, and removing a registry nub without a property

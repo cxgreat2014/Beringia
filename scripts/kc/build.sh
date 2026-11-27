@@ -56,21 +56,28 @@ for k in "$@"; do
 	esac
 	rel=${b#"$BERINGIA_KDK_EXTENSIONS"/}
 	name=$(basename "$b" .kext)
-	[ -f "$b/Contents/Info.plist" ] || die "no $b/Contents/Info.plist"
-	exe=$(python3 -c 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb")).get("CFBundleExecutable", ""))' \
-		"$b/Contents/Info.plist")
-	if [ -n "$exe" ] && [ -f "$b/Contents/MacOS/$exe" ]; then
-		archs=$("$LLVM_BIN/llvm-lipo" "$b/Contents/MacOS/$exe" -archs)
-		if [ "${archs// /}" != x86_64 ]; then
-			"$LLVM_BIN/llvm-lipo" "$b/Contents/MacOS/$exe" -thin x86_64 -output "$out/thin/$name"
-		else
-			cp "$b/Contents/MacOS/$exe" "$out/thin/$name"
-		fi
-		python3 "$BERINGIA_ROOT/tools/kc/kpibind.py" "$out/thin/$name" "$b/Contents/Info.plist" "$BERINGIA_KDK_EXTENSIONS" \
-			"$out/thin/$name.bound"
-		args+=("/System/Library/Extensions/$rel" "Contents/MacOS/$exe" "$out/thin/$name.bound" "$b/Contents/Info.plist")
+	# Contents/ layout (Contents/Info.plist, Contents/MacOS/EXE) or flat (Info.plist, EXE: IOGraphicsFamily)
+	if [ -f "$b/Contents/Info.plist" ]; then
+		info=$b/Contents/Info.plist exedir=Contents/MacOS/
+	elif [ -f "$b/Info.plist" ]; then
+		info=$b/Info.plist exedir=
 	else
-		args+=("/System/Library/Extensions/$rel" - - "$b/Contents/Info.plist")
+		die "no Info.plist in $b"
+	fi
+	exe=$(python3 -c 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb")).get("CFBundleExecutable", ""))' \
+		"$info")
+	if [ -n "$exe" ] && [ -f "$b/$exedir$exe" ]; then
+		archs=$("$LLVM_BIN/llvm-lipo" "$b/$exedir$exe" -archs)
+		if [ "${archs// /}" != x86_64 ]; then
+			"$LLVM_BIN/llvm-lipo" "$b/$exedir$exe" -thin x86_64 -output "$out/thin/$name"
+		else
+			cp "$b/$exedir$exe" "$out/thin/$name"
+		fi
+		python3 "$BERINGIA_ROOT/tools/kc/kpibind.py" "$out/thin/$name" "$info" "$BERINGIA_KDK_EXTENSIONS" \
+			"$out/thin/$name.bound"
+		args+=("/System/Library/Extensions/$rel" "$exedir$exe" "$out/thin/$name.bound" "$info")
+	else
+		args+=("/System/Library/Extensions/$rel" - - "$info")
 	fi
 done
 printf '%s\n' "$@" > "$out/kexts.txt"

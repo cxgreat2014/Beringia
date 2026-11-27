@@ -26,6 +26,7 @@ running after the script returns. Settings (in `local.env` or the environment; s
 | `BERINGIA_RAMDISK` | optional HFS+/APFS image loaded as memdev `pmd0`, with `rd=md0` appended. |
 | `BERINGIA_DISK` | optional raw host file exposed through BeringiaDisk as block unit 0. For the recovery container, add `rd=disk0` to `BERINGIA_BOOT_ARGS`. |
 | `BERINGIA_OSK_FILE` | the DSMOS key from your own Mac, for BeringiaSMC ([setup/macos-assets.md](setup/macos-assets.md)); `meta.txt` records only whether one was supplied. |
+| `BERINGIA_FB` | the boot framebuffer, `WIDTHxHEIGHT` at 32 bpp (default: the loader's, 1280x800; empty: none). See "The screen" below. |
 | `BERINGIA_WIN_DIR` | e.g. `/mnt/c/Users/<you>/xnu-work`: per-run directories and the watchdog's marker live here. |
 | `BERINGIA_WATCH_MINUTES` | how long the watchdog stays armed for the run (default 60). |
 | `BERINGIA_FAILFAST` | default 1: `softlockup_panic`, `panic_on_rcu_stall` and an RCU stall timeout of `BERINGIA_STALL_SECS` (20). A wedged CPU then ends in a panic with backtraces on the console instead of a silent hang. |
@@ -128,7 +129,70 @@ dmesg | grep 'BERINGIA dump' | sed 's/^.*BERINGIA dump: //' |
 Every thread is printed with its name, state, priority, wait event, continuation and a frame-pointer backtrace;
 `symbolize.py` annotates every slid kernel address (`0xffffff80...`) with `symbol+offset`. Wait events are usually the
 address of the object waited on, so they symbolize too (e.g. `_max_cpus_initialized`). The same script works on panic
-backtraces.
+backtraces. The walk takes no lock, so it refuses to run with more than one hosted CPU.
+
+## Where is a user process stuck?
+
+Write a process name (a substring, or `*` for all) instead of `1`: the dump then also prints, for each thread of the
+matching processes, its saved user RIP/RSP and a frame-pointer walk of its user stack, and per process the main
+image's address and the dyld shared cache slide. `tools/debug/dyldsym.py` names the frames from the shared cache
+itself (its `.map` and the images' symbol tables; the cache must be the one on the booted image, e.g. from the tree
+the image was built from):
+
+```sh
+echo WindowServer > /sys/module/beringia_xnu/parameters/dump
+dmesg | grep 'BERINGIA dump' | sed 's/^.*BERINGIA dump: //' > dump.txt
+python3 -I tools/debug/dyldsym.py "$ROOT/System/Library/dyld/dyld_shared_cache_x86_64h" < dump.txt
+#   0x7ff802eba5c6 libsystem_kernel.dylib`___semwait_signal+0xa
+#   0x7ff802d991c4 libsystem_c.dylib`_usleep+0x35
+#   0x7ff81547aa8f GPUWrangler`_GPUWranglerOpenWithTimeout+0x19f      <- what it waits for
+#   0x1085406d1 main+0x6d1
+```
+
+The cache's local symbols are not in the OTA, so a frame in a static function shows the nearest preceding global
+symbol. Frames in the main executable show as `main+offset` (offset from its Mach-O header). The block hint in the
+thread line says how the kernel side waits (2 a Mach receive, 6 a semaphore, 15 an idle workqueue thread).
+
+Some binaries (loginwindow, Finder, Dock and the other DSMOS-protected ones) are encrypted on disk and decrypted only
+in memory. `peek:PID:ADDR:LEN` (at most 4096 bytes; the whole string at most 31 characters) prints that process's
+memory instead of a dump, which can then be disassembled:
+
+```sh
+echo 'peek:142:0x10dbe4a00:0x300' > /sys/module/beringia_xnu/parameters/dump
+dmesg | python3 -I tools/debug/peek2bin.py code.bin          # prints the base address
+objdump -D -b binary -m i386:x86-64 --adjust-vma=0x10dbe4a00 code.bin
+```
+
+## macOS's own logs
+
+macOS keeps its unified log (tracev3), launchd's log and its crash reports on the system image. After a run (the
+image is in use while XNU runs), copy them out as root:
+
+```sh
+sudo env BERINGIA_UNIFIEDLOG=/path/to/unifiedlog_iterator BERINGIA_APFS_KO=/path/to/linux-apfs-rw/apfs.ko \
+  tools/debug/harvest.sh            # into the newest run directory's macos-logs/
+```
+
+It mounts the image read-only with linux-apfs-rw inside a private mount namespace (a mount in the shared namespace
+also appears in WSL's own service namespaces, where it outlives `umount` and keeps the loop device and the module
+busy). With `BERINGIA_UNIFIEDLOG` pointing at Mandiant's `unifiedlog_iterator` (macos-UnifiedLogs, Apache-2.0; build
+it yourself) it also writes `unifiedlog.jsonl`, one JSON object per log entry with `process`, `pid`, `subsystem`,
+`message` and `boot_uuid`; filter by the newest `boot_uuid`, every boot of the image is in there.
+
+## The screen
+
+The loader gives XNU a boot framebuffer (`fb=WxH`, default 1280x800, XRGB8888) at the top of the low carve-out, outside
+XNU's RAM, and a device-tree node `/display` whose `reg` covers it. IONDRVSupport's `IONDRVFramebuffer` matches that
+node and drives the memory through `IOBootNDRV`, so WindowServer gets a display without a GPU driver. Linux reads the
+same memory through `/dev/beringia-fb` (root only; the geometry is in `/sys/class/misc/beringia-fb/geometry`):
+
+```sh
+sudo tools/debug/fbshot.py shot.png                   # one PNG
+sudo tools/debug/fbshot.py --every 5 shots/           # one every 5 s until interrupted
+```
+
+XNU maps the framebuffer write-combining, which under Linux's PAT is UC- (see current-issues.md, Display); the read
+side flushes the cache lines it reads, so a screenshot shows what is in memory.
 
 ## Useful module parameters
 
@@ -136,7 +200,8 @@ backtraces.
 |---|---|
 | `beringia_host.ko statecheck=1` | (default) the state safety net: Linux's unswitched CPU state is compared after every foreign-world exit, reported and restored. |
 | `beringia_host.ko selftest_sleep=N selftest_tamper=1` | self-test: every Nth host call sleeps in `bh_idle`; the test kernel changes IA32_PAT behind the host's back. |
-| `beringia_xnu.ko dump` (write) | the thread dump above. |
+| `beringia_xnu.ko dump` (write) | the thread dump above: `1` kernel stacks, a process name or `*` also user stacks, `peek:PID:ADDR:LEN` user memory. |
+| `beringia_xnu.ko fb=WxH` | the boot framebuffer (default 1280x800, `""` none), `/dev/beringia-fb`. |
 | `beringia_host.ko carve=BASE:SIZE[,BASE:SIZE...]` | physical RAM for XNU (reserved with `memmap=`). |
 | `beringia_host.ko trace=PATH` | also append log lines to this file. |
 | `beringia_host.ko selftest=N selftest_cpus=M` | run the world-switch self-test (no XNU needed). |

@@ -9,6 +9,18 @@
 #                                      IOUserResources and need it; without it the registry never goes quiet
 #                                      (kernelmanagerd cannot load the on-disk SystemKernelExtensions.kc for us) and
 #                                      WindowServer waits forever in IOKitWaitQuiet()
+#   IOHIDFamily (+ IOReportFamily)     IOHIDSystem (matches IOResources): without it WindowServer logs "IOHIDSystem not
+#                                      found" / "Cannot open the HID and display/cursor system" and exits(1)
+#   IOGraphicsFamily                   IOFramebuffer, IODisplayWrangler (display power state for powerd/WindowServer)
+#   IONDRVSupport                      IONDRVFramebuffer + IOBootNDRV: drives the loader's boot framebuffer through the
+#                                      device-tree node /display (loader fb=WxH)
+#   AppleGPUWrangler (+ AGDC)          the GPU wrangler service: CoreDisplay's CGXMappedDisplayStart waits for it in
+#                                      GPUWranglerOpenWithTimeout before WindowServer brings up any display
+#   IOSurface                          IOSurfaceRoot: Metal's device enumeration (from CoreDisplay) waits for it in
+#                                      ioSurfaceConnectInternal
+#   lifs                               LiveFS, FSKit's kernel side: without its user client fskitd exits ("sending
+#                                      mach port to kernel"), and diskarbitrationd -> storagekitd -> loginwindow's
+#                                      desktop picture wait for it
 pthread.kext
 corecrypto.kext
 CoreTrust.kext
@@ -46,3 +58,12 @@ AppleFSCompressionTypeDataless.kext
 IOSerialFamily.kext
 IOUserSerial.kext
 Dont Steal Mac OS X.kext
+IOReportFamily.kext
+IOHIDFamily.kext
+IOHIDFamily.kext/Contents/PlugIns/IOHIDSystem.kext
+IOGraphicsFamily.kext
+IONDRVSupport.kext
+AppleGraphicsControl.kext/Contents/PlugIns/AppleGraphicsDeviceControl.kext
+AppleGraphicsControl.kext/Contents/PlugIns/AppleGPUWrangler.kext
+IOSurface.kext
+lifs.kext

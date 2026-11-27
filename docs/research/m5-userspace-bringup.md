@@ -170,6 +170,31 @@ a tracev3 reader (not built yet). Other crash loops, from their `.ips` reports i
 launchd's own text log (`/private/var/log/com.apple.xpc.launchd/launchd.log`) and the crash reports can be read from
 Linux with the image mounted read-only (`mount -t apfs -o ro,loop`, linux-apfs-rw), even while XNU runs.
 
+## 7. From WindowServer's exit to the first GUI pixels (2026-11-28)
+
+Three new tools turned guessing into reading ([../debugging.md](../debugging.md)): macOS's own unified log, decoded on
+Linux (`tools/debug/harvest.sh`); user-space backtraces in the thread dump, named from the dyld shared cache
+(`dump=NAME`, `tools/debug/dyldsym.py`); and screenshots of a framebuffer the loader now provides
+(`tools/debug/fbshot.py`). With them, each blocker named itself:
+
+| What was seen | Where it came from | Fix |
+|---|---|---|
+| WindowServer `exit(1)`: `IOHIDSystem not found` / `Cannot open the HID and display/cursor system` (unified log) | no IOHIDFamily in the KC | IOHIDFamily (+ IOReportFamily, the IOHIDSystem personality) |
+| `timed` SIGABRT, `TMSleepWake.m:117 rc == kIOReturnSuccess`; `coreaudiod`, `apsd`: `pm connection failed` | `IOPMConnectionCreate`: `com.apple.PowerManagement.control` unknown, **powerd never started**. Its launchd plist is a hard link to `powerd.bundle/com.apple.powerd.plist` and the image lacked it | `tools/disk/mtree.py --fix-hardlinks` against the OTA's mtree: **23 427 hard-link names** were missing (launchd plists, `CodeResources`, resources); all restored |
+| WindowServer runs but is silent; main thread `usleep` in `GPUWranglerOpenWithTimeout` (CoreDisplay `CGXMappedDisplayStart`) | no GPU wrangler service | AppleGraphicsDeviceControl + AppleGPUWrangler (match `IOResources`) |
+| then `sleep` in IOSurface `ioSurfaceConnectInternal`, from Metal's device enumeration | no `IOSurfaceRoot` | IOSurface.kext |
+| no display at all | no framebuffer | the loader's boot framebuffer + `/display` node; IOGraphicsFamily + IONDRVSupport (`IONDRVFramebuffer` with `IOBootNDRV`) |
+| WindowServer reaches `server_loop`: **the cursor is drawn** (run `20261128-021901`) | | |
+| loginwindow: `usleep` loop in `main`, waiting for a flag (code peeked from memory: the binary is DSMOS-encrypted on disk) | it runs Language Chooser on a fresh system and waits for it | (expected on first boot) |
+| Language Chooser: `-[IOBluetoothHostController defaultController]` waits on a semaphore | bluetoothd waits forever for an `IOBluetoothHCIController` (`Couldn't find IOBluetoothHCIController service, waiting for it to appear`); clients wait for bluetoothd | experiment: `com.apple.bluetoothd` disabled in the image's `/private/var/db/com.apple.xpc.launchd/disabled.plist` |
+| then `LUICopyDefaultDesktopPicture` → StorageKit `syncAllDisks` → diskarbitrationd → FSKit `-[FSClient setupConnection]`; fskitd exits: `get client returned E0000001` / `sending mach port to kernel` | no LiveFS kernel extension | lifs.kext |
+| Language Chooser idle in `-[NSApplication run]`; WindowServer has replaced the boot screen with black and the cursor (run `20261128-023734`) | | next: why its window does not reach the screen |
+
+The kernel collection is now 48 kexts ([scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts) says why
+each is there). Crash loops left: `pkd` (OS cryptex content), `mobileassetd`, `Kerberos.digest-service`, the
+`distnoted` agent (`exit(78)`), `endpointsecurityd` (no EndpointSecurity kext); `timed` and `coreduetd` no longer
+crash.
+
 ## Reproduce the full-system boot
 
 The KDK part of the kernel collection is [scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts); the two
@@ -193,6 +218,11 @@ sudo scripts/run/stop.sh
 
 Add `beringia_busy_report=1` to see what holds the registry busy, `kextlog=0x2f` for kext load requests. The image is
 mounted read-write by macOS: copy it before experiments.
+
+Two changes to the image are part of the 2026-11-28 state (section 7), until the image builder does them: the lost
+hard links restored with `tools/disk/mtree.py check MTREE ROOT --fix-hardlinks` (on the image mounted read-write, or on
+the staging tree before the image is built), and `com.apple.bluetoothd` set to `true` in
+`/private/var/db/com.apple.xpc.launchd/disabled.plist`. The loader's framebuffer is on by default (`BERINGIA_FB`).
 
 ## Next proof points
 
