@@ -40,12 +40,17 @@ wait_halted() {	# seconds
 	done
 	halted
 }
+# the watchdog's stop timeout is 180 s (scripts/run/wsl-watchdog.ps1): keep both waits inside it
+wait1=${BERINGIA_SHUTDOWN_WAIT:-60}
+wait2=${BERINGIA_ESTOP_WAIT:-30}
+[ "$wait1" -le 120 ] || wait1=120
+[ "$wait2" -le 60 ] || wait2=60
 if loaded && [ "${BERINGIA_SHUTDOWN:-1}" != 0 ] && [ -w /sys/module/beringia_xnu/parameters/shutdown ]; then
 	echo 1 > /sys/module/beringia_xnu/parameters/shutdown ||
 		echo "could not ask XNU to shut down (ABI mismatch?); unloading as it is" >&2
-	if wait_halted "${BERINGIA_SHUTDOWN_WAIT:-60}"; then
+	if wait_halted "$wait1"; then
 		echo "XNU shut down and halted (launchd's path)"
-	elif echo escalate > /sys/module/beringia_xnu/parameters/shutdown && wait_halted "${BERINGIA_ESTOP_WAIT:-30}"; then
+	elif echo escalate > /sys/module/beringia_xnu/parameters/shutdown && wait_halted "$wait2"; then
 		echo "XNU shut down and halted (the kernel's path)"
 	else
 		echo "XNU did not halt in time: unloading it as it is" >&2
