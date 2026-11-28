@@ -51,6 +51,20 @@ What a synthetic device cannot do is let IOPCIFamily configure or match drivers 
 a host bridge sets up), so `BeringiaPCIBridge` refuses to match or probe and `BeringiaPCIDevice::getResources()` is a
 no-op. Nothing needs that yet: the device is created directly, and drivers for it will be created the same way.
 
+## The AGDC service (BeringiaGPUControl)
+
+GPUWrangler stores an AGDC service in the GPU record (`agdc`), and IOPresentment opens that service's user client
+(type 2) and asks kAGDCVendorInfo (selector 1) and kAGDCGPUCapability (selector 0x980) before it can build the device
+map that CoreDisplay's DisplayPipe needs. The KDK ships no headers for `AppleGraphicsDeviceControl`, so
+`AppleGraphicsDeviceControl.h` is a source-level reconstruction from the KDK binary (vtable order, the one pure
+virtual, the attribute protocol and the two struct layouts, with static asserts). `BeringiaGPUControl` answers the two
+vendor selectors: platform 106b:0be1 with iface 2, and one framebuffer - the service objects, not registry IDs, which
+is what the base class converts for the user client (run 20261128-121204 faulted on IDs).
+
+Run `20261128-121723`: `agdc 0x100000127 /BeringiaGPUControl` in the GPU record, and **IOPresentment no longer logs
+`Unable to acquire map`** - the map exists. The display is still offline: the next step is the IOAccelerator and its
+display pipe (`accel 0` in the record).
+
 Next (W2 checklist steps 7-13): the log shows `agdc 0` and `accel 0`, and IOPresentment still says `Unable to acquire
 map`. The GPU record needs an AppleGraphicsDeviceControl (with the capability array naming our framebuffer) and an
 IOAccelerator with a display pipe; then CoreDisplay builds a real (non-virtual) display and SkyLight scans out.

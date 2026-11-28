@@ -22,6 +22,7 @@
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include "BeringiaPCI.h"
+#include "BeringiaGPUControl.h"
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
@@ -69,6 +70,7 @@ class BeringiaFramebuffer : public IOFramebuffer
 	bool fHosted;              /* this instance is the PCI-hosted framebuffer, not the device-tree node */
 	BeringiaPCIDevice *fPCI;   /* the virtual PCI device it sits on */
 	BeringiaPCIBridge *fPCIBridge;  /* and the bridge the device hangs from (GPUWrangler dereferences it) */
+	BeringiaGPUControl *fGPUControl;    /* the AGDC service GPUWrangler and IOPresentment ask for */
 
 	bool startHosted(IOService *deviceNode);
 
@@ -245,6 +247,15 @@ BeringiaFramebuffer::startHosted(IOService *node)
 	IOLog("BeringiaFramebuffer: PCI %04x:%04x config %08x class %08x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE,
 	    fPCI->extendedConfigRead32(0), fPCI->extendedConfigRead32(8));
 	fPCI->registerService(0);
+	/* the AGDC service: GPUWrangler stores its registry ID in the GPU record and IOPresentment asks it for the
+	 * framebuffer list (AppleGraphicsDeviceControl.h) */
+	fGPUControl = new BeringiaGPUControl;
+	if (!fGPUControl || !fGPUControl->init(NULL) || !fGPUControl->IOService::attach(fPCI) ||
+	    !fGPUControl->start(fPCI)) {
+		IOLog("BeringiaFramebuffer: the AGDC service did not start\n");
+		return false;
+	}
+	fGPUControl->registerService(0);
 	fb = new BeringiaFramebuffer;
 	if (!fb || !fb->init(NULL)) {
 		return false;
@@ -256,6 +267,9 @@ BeringiaFramebuffer::startHosted(IOService *node)
 		return false;
 	}
 	fb->registerService();
+	if (fGPUControl) {
+		fGPUControl->setFramebuffer(fb);
+	}
 	IOLog("BeringiaFramebuffer: hosted under virtual PCI %04x:%04x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE);
 	return true;
 }
@@ -383,7 +397,8 @@ BeringiaFramebuffer::free(void)
 		fOpenCall = NULL;
 	}
 	OSSafeReleaseNULL(fVRAM);
-	OSSafeReleaseNULL(fPCI);        /* the device first: its provider is the bridge */
+	OSSafeReleaseNULL(fGPUControl);     /* before the device it hangs from */
+	OSSafeReleaseNULL(fPCI);            /* the device first: its provider is the bridge */
 	OSSafeReleaseNULL(fPCIBridge);
 	IOFramebuffer::free();
 }

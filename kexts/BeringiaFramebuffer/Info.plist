@@ -49,6 +49,8 @@
 		<string>1.0.0b1</string>
 		<key>com.apple.iokit.IOPCIFamily</key>
 		<string>2.9</string>
+		<key>com.apple.AppleGraphicsDeviceControl</key>
+		<string>1.0</string>
 		<key>com.apple.kpi.iokit</key>
 		<string>18.0.0</string>
 		<key>com.apple.kpi.libkern</key>

@@ -9,7 +9,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 out=$BERINGIA_BUILD/kexts/BeringiaFramebuffer
 bundle=$out/BeringiaFramebuffer.kext
 exe=$bundle/Contents/MacOS/BeringiaFramebuffer
-objs=("$out/BeringiaFramebuffer.o" "$out/BeringiaPCI.o")
+srcs=(BeringiaFramebuffer BeringiaPCI BeringiaGPUControl)
+objs=()
 cxx=$BERINGIA_TOOLCHAIN/binx86/target-clang++
 ld=$BERINGIA_TOOLCHAIN/toolchain/bin/x86_64-apple-darwin-ld
 kheaders=$BERINGIA_SDK/System/Library/Frameworks/Kernel.framework/Headers
@@ -20,7 +21,7 @@ kheaders=$BERINGIA_SDK/System/Library/Frameworks/Kernel.framework/Headers
 mkdir -p "$bundle/Contents/MacOS"
 
 log "compiling BeringiaFramebuffer and BeringiaPCI (thin x86_64, macOS kernel ABI)"
-for src in BeringiaFramebuffer BeringiaPCI; do
+for src in "${srcs[@]}"; do
 	"$cxx" \
 		--target=x86_64-apple-macos26.0 -arch x86_64 -mmacosx-version-min=26.0 \
 		-std=gnu++2b -fsized-deallocation -fapple-kext -static -mkernel -msoft-float \
@@ -34,6 +35,7 @@ for src in BeringiaFramebuffer BeringiaPCI; do
 		-I"$BERINGIA_ROOT/xnu/include" -isystem "$kheaders" -isystem "$BERINGIA_SDK/usr/include" \
 		-Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers \
 		-Wno-deprecated-declarations
+	objs+=("$out/$src.o")
 done
 
 log "linking MH_KEXT_BUNDLE"
