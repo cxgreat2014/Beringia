@@ -174,6 +174,7 @@ long ldr_hostcall(int cpu, unsigned long nr, unsigned long a1, unsigned long a2)
 	case BERINGIA_CALL_PANIC:
 		if (a1 < BERINGIA_MAX_CPUS)
 			console_line(a1, a2, "XNU PANIC on cpu ");
+		WRITE_ONCE(ldr.halted, 1);      /* the run is over: stop.sh must not wait for an orderly shutdown */
 		return BH_ABORT;
 	case BERINGIA_CALL_HALT:
 		WRITE_ONCE(ldr.halted, 1);

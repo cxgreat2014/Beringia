@@ -30,7 +30,7 @@
 			<key>CFBundleIdentifier</key>
 			<string>com.beringia.framebuffer</string>
 			<key>IOClass</key>
-			<string>BeringiaFramebuffer</string>
+			<string>BeringiaDisplayHost</string>
 			<key>IOMatchCategory</key>
 			<string>IOFramebuffer</string>
 			<key>IONameMatch</key>

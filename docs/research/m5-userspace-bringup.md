@@ -206,8 +206,8 @@ crash.
 
 ## Reproduce the full-system boot
 
-The KDK part of the kernel collection is [scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts); the two
-Beringia kexts go after it. `BERINGIA_OSK_FILE` (in `local.env`) must name your DSMOS key file
+The KDK part of the kernel collection is [scripts/kc/full-system.kexts](../../scripts/kc/full-system.kexts); the three
+Beringia kexts (BeringiaDisk, BeringiaSMC, BeringiaFramebuffer) go after it. `BERINGIA_OSK_FILE` (in `local.env`) must name your DSMOS key file
 ([../setup/macos-assets.md](../setup/macos-assets.md)), or DSMOS keeps waiting:
 
 ```bash

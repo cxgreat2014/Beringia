@@ -224,8 +224,8 @@ it yourself) it also writes `unifiedlog.jsonl.gz`, one JSON object per log entry
 copy of the golden image holds one boot; on an image booted again, filter by the newest `boot_uuid`, or empty the logs
 after harvesting with `--clear`.
 
-The run ends without a shutdown, and logd keeps its newest entries in memory, so the last minutes before `stop.sh`
-are often missing; `experiment.sh` waits `--settle` seconds (default 30) before stopping for that reason.
+`stop.sh` ends a run with a real shutdown (patch 0048) and logd flushes on the way, but its newest entries still live
+in memory until then; `experiment.sh` waits `--settle` seconds (default 30) before stopping for that reason.
 
 ## The screen
 

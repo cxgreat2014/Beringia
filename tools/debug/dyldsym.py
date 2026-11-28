@@ -144,9 +144,7 @@ def main():
         if m:
             image, slide = int(m.group(1), 16), int(m.group(2), 16)
         elif re.match(r"pid \d+ proc ", line.strip()):
-            # a thread's line starts its task's block: until a "task image" line follows, this task's addresses
-            # must not be symbolized with the previous task's image and slide
-            image = slide = None
+            pass    # the dump prints "task image" once per task, before its first thread: do not clear it here
         print(line)
         if "user rip" in line and slide is not None:
             for tok in re.findall(r"0x[0-9a-f]+", line.split(" bt ", 1)[0].split("rsp")[0]) + \

@@ -89,7 +89,7 @@ if [ -n "$dumps" ] && ! panicked; then
 		dmesg -C
 		echo "$p" > /sys/module/beringia_xnu/parameters/dump
 		sleep 3
-		dmesg | grep -a "BERINGIA dump" | sed 's/^.*BERINGIA dump: //' > "$run_dir/dump-$p.txt"
+		dmesg | grep -a "BERINGIA dump" | sed 's/^.*BERINGIA dump: //' > "$run_dir/dump-$p.txt" || true
 		if [ -f "$cache" ]; then
 			python3 -I "$root/tools/debug/dyldsym.py" "$cache" < "$run_dir/dump-$p.txt" > "$run_dir/dump-$p-sym.txt" ||
 				log "symbolizing the dump of $p failed"
@@ -103,6 +103,6 @@ if [ "$keep" = 1 ]; then
 fi
 panicked || sleep "$settle"
 "$root/scripts/run/stop.sh" > /dev/null
-apfs_loaded
+apfs_loaded || log "no apfs module: the harvest will fail"
 "$root/tools/debug/harvest.sh" "$copy" "$run_dir/macos-logs" > /dev/null 2>&1 || log "harvest failed"
 python3 -I "$root/tools/debug/run-summary.py" "$run_dir" "${greps[@]}"

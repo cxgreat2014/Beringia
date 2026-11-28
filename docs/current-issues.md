@@ -35,7 +35,7 @@ there is no input. How each blocker on the way was found and fixed:
   /BeringiaFramebuffer` (run `20261128-065909`, kernel clean) — a PCI GPU with the framebuffer under it, not the
   0x8000 no-PCI fallback. Its record still shows `agdc 0` and `accel 0`, so IOPresentment still says `Unable to
   acquire map`; the next step is the AppleGraphicsDeviceControl capability array and an IOAccelerator with a
-  display pipe (analysis/w2-gpu checklist steps 7-13). WindowServer also cannot register `com.apple.CARenderServer` (`Operation already in
+  display pipe. WindowServer also cannot register `com.apple.CARenderServer` (`Operation already in
   progress`: the job's plist already owns that name), and the display ID stays 0. Without BeringiaFramebuffer,
   IONDRVSupport's `IONDRVFramebuffer`/`IOBootNDRV` drives the node, and CoreDisplay keeps that display offline.
 - The image had lost **23 427 hard-linked file names** in extraction (powerd's launchd plist among them, so powerd

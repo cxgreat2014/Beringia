@@ -20,7 +20,7 @@
 #ifndef BERINGIA_ABI_H
 #define BERINGIA_ABI_H
 
-#define BERINGIA_ABI_VERSION    3       /* 1: block calls 34/35; 2: beringia_shared.dump_filter; 3: kernel_abi */
+#define BERINGIA_ABI_VERSION    4       /* 1: block calls 34/35; 2: dump_filter; 3: kernel_abi; 4: STOP/ESTOP */
 #define BERINGIA_KERNEL_BASE    0xffffff8000000000ULL   /* x86_64 XNU KERNEL_BASE: image PA = VA - this */
 #define BERINGIA_MAX_CPUS       64
 

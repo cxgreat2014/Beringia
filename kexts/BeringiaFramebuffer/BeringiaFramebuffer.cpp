@@ -22,7 +22,7 @@
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include "BeringiaPCI.h"
-#include "BeringiaGPUControl.h"
+#include "BeringiaFramebufferFactory.h"
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
@@ -67,12 +67,6 @@ class BeringiaFramebuffer : public IOFramebuffer
 	IOTimerEventSource *fConnectTimer;
 	thread_call_t fOpenCall;
 	bool fStopping;
-	bool fHosted;              /* this instance is the PCI-hosted framebuffer, not the device-tree node */
-	BeringiaPCIDevice *fPCI;   /* the virtual PCI device it sits on */
-	BeringiaPCIBridge *fPCIBridge;  /* and the bridge the device hangs from (GPUWrangler dereferences it) */
-	BeringiaGPUControl *fGPUControl;    /* the AGDC service GPUWrangler and IOPresentment ask for */
-
-	bool startHosted(IOService *deviceNode);
 
 	UInt64 pixelClock(void) const
 	{
@@ -212,81 +206,11 @@ BeringiaFramebuffer::buildEDID(void)
  * BeringiaPCI.h). The instance under the PCI device (fHosted) does the work.
  */
 bool
-BeringiaFramebuffer::startHosted(IOService *node)
-{
-	BeringiaFramebuffer *fb;
-
-	/* The virtual PCI device is an experiment until the display stack accepts it: boot with beringia_pci=1 to try
-	 * it; by default the driver stays on the device-tree node. */
-	uint32_t pci = 0;
-	if (!PE_parse_boot_argn("beringia_pci", &pci, sizeof(pci)) || !pci) {
-		return false;
-	}
-	/*
-	 * The device must be an ordinary IOPCIDevice with an IOPCIBridge provider: GPUWrangler stores
-	 * safeMetaCast(device->getProvider(), IOPCIBridge) and dereferences it, and IOPCIDevice's configAccess
-	 * dereferences the bridge's ExpansionData. Neither the bridge nor the device is registered or probed: the
-	 * bridge enumerates nothing, and the device is created here and published once.
-	 */
-	fPCIBridge = new BeringiaPCIBridge;
-	if (!fPCIBridge || !fPCIBridge->init(NULL) || !fPCIBridge->IOService::attach(node)) {
-		IOLog("BeringiaFramebuffer: no PCI bridge under %s\n", node->getName());
-		return false;
-	}
-	fPCI = new BeringiaPCIDevice;
-	if (!fPCI || !fPCI->init(NULL)) {
-		IOLog("BeringiaFramebuffer: no virtual PCI device\n");
-		return false;
-	}
-	fPCI->setPCIBridge(fPCIBridge);
-	fPCI->space.bits = 0;           /* bus 0, device 0, function 0 */
-	if (!fPCI->IOService::attach(fPCIBridge) || !fPCI->start(fPCIBridge)) {
-		IOLog("BeringiaFramebuffer: the PCI device did not start\n");
-		return false;
-	}
-	IOLog("BeringiaFramebuffer: PCI %04x:%04x config %08x class %08x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE,
-	    fPCI->extendedConfigRead32(0), fPCI->extendedConfigRead32(8));
-	fPCI->registerService(0);
-	/* the AGDC service: GPUWrangler stores its registry ID in the GPU record and IOPresentment asks it for the
-	 * framebuffer list (AppleGraphicsDeviceControl.h) */
-	fGPUControl = new BeringiaGPUControl;
-	if (!fGPUControl || !fGPUControl->init(NULL) || !fGPUControl->IOService::attach(fPCI) ||
-	    !fGPUControl->start(fPCI)) {
-		IOLog("BeringiaFramebuffer: the AGDC service did not start\n");
-		return false;
-	}
-	fGPUControl->registerService(0);
-	fb = new BeringiaFramebuffer;
-	if (!fb || !fb->init(NULL)) {
-		return false;
-	}
-	fb->fHosted = true;
-	if (!fb->attach(fPCI) || !fb->start(fPCI)) {
-		IOLog("BeringiaFramebuffer: the PCI-hosted framebuffer did not start\n");
-		fb->release();
-		return false;
-	}
-	fb->registerService();
-	if (fGPUControl) {
-		fGPUControl->setFramebuffer(fb);
-	}
-	IOLog("BeringiaFramebuffer: hosted under virtual PCI %04x:%04x\n", BERINGIA_PCI_VENDOR, BERINGIA_PCI_DEVICE);
-	return true;
-}
-
-bool
 BeringiaFramebuffer::start(IOService *provider)
 {
 	PE_Video video;
 	IODeviceMemory *mem;
 
-	if (!fHosted && OSDynamicCast(IOPCIDevice, provider) == NULL) {
-		/* matched the device tree node: with beringia_pci=1, build the PCI device and the framebuffer under it and
-		 * publish neither here; otherwise this instance is the framebuffer itself */
-		if (startHosted(provider)) {
-			return false;
-		}
-	}
 	bzero(&video, sizeof(video));
 	if (!getPlatform() || getPlatform()->getConsoleInfo(&video) != kIOReturnSuccess || !video.v_baseAddr ||
 	    video.v_depth != 32 || !video.v_width || !video.v_height || video.v_rowBytes < video.v_width * 4) {
@@ -314,7 +238,7 @@ BeringiaFramebuffer::start(IOService *provider)
 		}
 		fVRAM = IODeviceMemory::withSubRange(mem, video.v_baseAddr - mem->getPhysicalAddress(),
 		    (IOByteCount)fStride * fHeight);
-	} else if (fHosted) {
+	} else if (OSDynamicCast(IOPCIDevice, provider) != NULL) {
 		fVRAM = IODeviceMemory::withRange(video.v_baseAddr, (IOByteCount)fStride * fHeight);
 	} else {
 		IOLog("BeringiaFramebuffer: the provider has no memory for the boot framebuffer\n");
@@ -372,8 +296,8 @@ void
 BeringiaFramebuffer::stop(IOService *provider)
 {
 	fStopping = true;
-	if (fOpenCall) {
-		thread_call_cancel(fOpenCall);  /* pending? cancel; already running: earlyOpen sees fStopping */
+	if (fOpenCall && thread_call_cancel(fOpenCall)) {
+		release();              /* the call was pending: drop the reference start() took; otherwise earlyOpen does */
 	}
 	if (fDisplayNotifier) {
 		fDisplayNotifier->remove();
@@ -397,9 +321,6 @@ BeringiaFramebuffer::free(void)
 		fOpenCall = NULL;
 	}
 	OSSafeReleaseNULL(fVRAM);
-	OSSafeReleaseNULL(fGPUControl);     /* before the device it hangs from */
-	OSSafeReleaseNULL(fPCI);            /* the device first: its provider is the bridge */
-	OSSafeReleaseNULL(fPCIBridge);
 	IOFramebuffer::free();
 }
 
@@ -733,6 +654,21 @@ BeringiaFramebuffer::setInterruptState(void *interruptRef, UInt32 state)
 		return IOFramebuffer::setInterruptState(interruptRef, state);
 	}
 	return kIOReturnSuccess;        /* raised at most once anyway */
+}
+
+/* BeringiaDisplayHost's way in: a new, initialised instance under the virtual PCI device. */
+IOService *
+beringia_framebuffer_create(void)
+{
+	BeringiaFramebuffer *fb = new BeringiaFramebuffer;
+
+	if (!fb || !fb->init(NULL)) {
+		if (fb) {
+			fb->release();
+		}
+		return NULL;
+	}
+	return fb;
 }
 
 /* The kmod_info the kext linker needs (OpenCore's refuses a kext without one); IOKit manages the instances. */

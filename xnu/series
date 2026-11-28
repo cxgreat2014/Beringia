@@ -51,3 +51,4 @@ hosted/0046-report-what-keeps-the-iokit-registry-busy-bring-.patch
 hosted/0047-user-space-backtraces-and-memory-peeks-in-the-th.patch
 hosted/0048-an-orderly-shutdown-from-the-host.patch
 hosted/0049-let-cryptexd-stat-the-hidden-preboot-directory.patch
+hosted/0050-abi-4-for-the-shutdown-bits.patch

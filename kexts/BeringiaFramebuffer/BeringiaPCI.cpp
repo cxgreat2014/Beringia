@@ -59,7 +59,7 @@ BeringiaPCIDevice::start(IOService *provider)
 	/* IOPCIDevice::start would ask the provider for a real host bridge; publish what IOPCIConfigurator would */
 	setData(this, "vendor-id", BERINGIA_PCI_VENDOR);
 	setData(this, "device-id", BERINGIA_PCI_DEVICE);
-	setData(this, "class-code", BERINGIA_PCI_CLASS >> 8);   /* <00 00 03 00> */
+	setData(this, "class-code", BERINGIA_PCI_CLASS);        /* <00 00 03 00> (Apple: config dword 8 >> 8) */
 	setData(this, "revision-id", 0);
 	setData(this, "subsystem-vendor-id", BERINGIA_PCI_VENDOR);
 	setData(this, "subsystem-id", BERINGIA_PCI_DEVICE);

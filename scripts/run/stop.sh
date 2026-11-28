@@ -41,7 +41,8 @@ wait_halted() {	# seconds
 	halted
 }
 if loaded && [ "${BERINGIA_SHUTDOWN:-1}" != 0 ] && [ -w /sys/module/beringia_xnu/parameters/shutdown ]; then
-	echo 1 > /sys/module/beringia_xnu/parameters/shutdown
+	echo 1 > /sys/module/beringia_xnu/parameters/shutdown ||
+		echo "could not ask XNU to shut down (ABI mismatch?); unloading as it is" >&2
 	if wait_halted "${BERINGIA_SHUTDOWN_WAIT:-60}"; then
 		echo "XNU shut down and halted (launchd's path)"
 	elif echo escalate > /sys/module/beringia_xnu/parameters/shutdown && wait_halted "${BERINGIA_ESTOP_WAIT:-30}"; then
