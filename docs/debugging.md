@@ -75,7 +75,7 @@ macOS writes to its system disk, so a run changes the image (logs, caches, first
 start from different conditions. Keep one **golden image** that is never booted, and boot a copy of it each time:
 
 ```sh
-sudo chattr +i "$BERINGIA_GOLDEN"           # once: not even root writes to it by accident
+sudo chattr +i "$BERINGIA_GOLDEN"           # once (local.env); not even root writes to it by accident
 # per run (boot.sh does this itself when BERINGIA_GOLDEN is set and BERINGIA_DISK is not):
 sudo scripts/run/disk-copy.sh RUN_ID        # sparse copy to $BERINGIA_WORK/runs/RUN_ID/system.img, prints the path
 ```

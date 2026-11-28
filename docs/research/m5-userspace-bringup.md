@@ -218,7 +218,7 @@ for k in BeringiaDisk BeringiaSMC BeringiaFramebuffer; do
   kexts+=("$(realpath --relative-to="$BERINGIA_KDK_EXTENSIONS" "$BERINGIA_BUILD/kexts/$k/$k.kext")")
 done
 scripts/kc/build.sh "${kexts[@]}"
-# local.env: BERINGIA_GOLDEN (the image, chattr +i), BERINGIA_KERNEL="$BERINGIA_BUILD/kc/prelinkedkernel",
+# local.env: BERINGIA_GOLDEN (the image, chattr +i), BERINGIA_KERNEL=/home/<you>/beringia-work/build/kc/prelinkedkernel,
 # BERINGIA_BOOT_ARGS="-v debug=0x8 serial=3 -pmap_pcid_disable keepsyms=1 cpus=1 startup_debug=1 rd=disk0 beringia_hide_preboot=1 beringia_no_coredump=1"
 sudo scripts/run/experiment.sh --note "full system" --shots 60,120,180 --dump WindowServer
 ```
