@@ -16,10 +16,24 @@ BeringiaDisplayHost::start(IOService *provider)
 {
 	IOService *fb;
 
-	/* the virtual GPU is an experiment: boot with beringia_pci=1 to build it */
+	/* without beringia_pci this host is the plain node framebuffer the old personality published: IONDRVFramebuffer
+	 * must not take the node instead (same IOMatchCategory), and without a PCI parent the display stays offline in
+	 * CoreDisplay, which is what the default boot has always shown */
 	uint32_t pci = 0;
 	if (!PE_parse_boot_argn("beringia_pci", &pci, sizeof(pci)) || !pci) {
-		return false;
+		fb = beringia_framebuffer_create();
+		if (!fb) {
+			return false;
+		}
+		if (!fb->attach(provider) || !fb->start(provider)) {
+			IOLog("BeringiaDisplayHost: the node framebuffer did not start\n");
+			fb->release();
+			return false;
+		}
+		fb->registerService();
+		fb->release();
+		IOLog("BeringiaDisplayHost: framebuffer on the device-tree node (no beringia_pci)\n");
+		return true;
 	}
 	/*
 	 * The device must be an ordinary IOPCIDevice with an IOPCIBridge provider: GPUWrangler stores
